@@ -14,7 +14,7 @@ import events = require('vs/base/common/events');
 import actions = require('vs/base/common/actions');
 import actionbar = require('vs/base/browser/ui/actionbar/actionbar');
 import actionbarregistry = require('vs/workbench/browser/actionBarRegistry');
-import tree = require('vs/base/parts/tree/common/tree');
+import tree = require('vs/base/parts/tree/browser/tree');
 import treeimpl = require('vs/base/parts/tree/browser/treeImpl');
 import splitview = require('vs/base/browser/ui/splitview/splitview');
 import memento = require('vs/workbench/common/memento');
@@ -22,7 +22,7 @@ import viewlet = require('vs/workbench/browser/viewlet');
 import debug = require('vs/workbench/parts/debug/common/debug');
 import model = require('vs/workbench/parts/debug/common/debugModel');
 import viewer = require('vs/workbench/parts/debug/browser/debugViewer');
-import dbgactions = require('vs/workbench/parts/debug/electron-browser/debugActions');
+import debugactions = require('vs/workbench/parts/debug/electron-browser/debugActions');
 import dbgactionitems = require('vs/workbench/parts/debug/browser/debugActionItems');
 import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
@@ -58,7 +58,7 @@ class VariablesView extends viewlet.CollapsibleViewletView {
 		@IDebugService private debugService: IDebugService,
 		@IInstantiationService private instantiationService: IInstantiationService
 	) {
-		super(actionRunner, !!settings[VariablesView.MEMENTO], 'variablesView', messageService, contextMenuService);
+		super(actionRunner, !!settings[VariablesView.MEMENTO], nls.localize('variablesSection', "Variables Section"), messageService, contextMenuService);
 	}
 
 	public renderHeader(container: HTMLElement): void {
@@ -119,7 +119,7 @@ class WatchExpressionsView extends viewlet.CollapsibleViewletView {
 		@IDebugService private debugService: IDebugService,
 		@IInstantiationService private instantiationService: IInstantiationService
 	) {
-		super(actionRunner, !!settings[WatchExpressionsView.MEMENTO], 'expressionsView', messageService, contextMenuService);
+		super(actionRunner, !!settings[WatchExpressionsView.MEMENTO], nls.localize('expressionsSection', "Expressions Section"), messageService, contextMenuService);
 		this.toDispose.push(this.debugService.getModel().addListener2(debug.ModelEvents.WATCH_EXPRESSIONS_UPDATED, (we) => {
 			// only expand when a new watch expression is added.
 			if (we instanceof model.Expression) {
@@ -147,9 +147,9 @@ class WatchExpressionsView extends viewlet.CollapsibleViewletView {
 
 		this.tree.setInput(this.debugService.getModel());
 
-		const addWatchExpressionAction = this.instantiationService.createInstance(dbgactions.AddWatchExpressionAction, dbgactions.AddWatchExpressionAction.ID, dbgactions.AddWatchExpressionAction.LABEL);
+		const addWatchExpressionAction = this.instantiationService.createInstance(debugactions.AddWatchExpressionAction, debugactions.AddWatchExpressionAction.ID, debugactions.AddWatchExpressionAction.LABEL);
 		const collapseAction = this.instantiationService.createInstance(viewlet.CollapseAction, this.tree, false, 'explorer-action collapse-explorer');
-		const removeAllWatchExpressionsAction = this.instantiationService.createInstance(dbgactions.RemoveAllWatchExpressionsAction, dbgactions.RemoveAllWatchExpressionsAction.ID, dbgactions.RemoveAllWatchExpressionsAction.LABEL);
+		const removeAllWatchExpressionsAction = this.instantiationService.createInstance(debugactions.RemoveAllWatchExpressionsAction, debugactions.RemoveAllWatchExpressionsAction.ID, debugactions.RemoveAllWatchExpressionsAction.LABEL);
 		this.toolBar.setActions(actionbarregistry.prepareActions([addWatchExpressionAction, collapseAction, removeAllWatchExpressionsAction]))();
 
 		this.toDispose.push(this.debugService.getModel().addListener2(debug.ModelEvents.WATCH_EXPRESSIONS_UPDATED, (we: model.Expression) => this.onWatchExpressionsUpdated(we)));
@@ -195,7 +195,7 @@ class CallStackView extends viewlet.CollapsibleViewletView {
 		@IDebugService private debugService: IDebugService,
 		@IInstantiationService private instantiationService: IInstantiationService
 	) {
-		super(actionRunner, !!settings[CallStackView.MEMENTO], 'callStackView', messageService, contextMenuService);
+		super(actionRunner, !!settings[CallStackView.MEMENTO], nls.localize('callstackSection', "Call Stack Section"), messageService, contextMenuService);
 	}
 
 	public renderHeader(container: HTMLElement): void {
@@ -303,7 +303,7 @@ class BreakpointsView extends viewlet.AdaptiveCollapsibleViewletView {
 	) {
 		super(actionRunner, BreakpointsView.getExpandedBodySize(
 			debugService.getModel().getBreakpoints().length + debugService.getModel().getFunctionBreakpoints().length + debugService.getModel().getExceptionBreakpoints().length),
-			!!settings[BreakpointsView.MEMENTO], 'breakpointsView', messageService, contextMenuService);
+			!!settings[BreakpointsView.MEMENTO], nls.localize('breakpointsSection', "Breakpoints Section"), messageService, contextMenuService);
 
 		this.toDispose.push(this.debugService.getModel().addListener2(debug.ModelEvents.BREAKPOINTS_UPDATED,() => this.onBreakpointsChange()));
 	}
@@ -381,10 +381,10 @@ class BreakpointsView extends viewlet.AdaptiveCollapsibleViewletView {
 
 	public getActions(): actions.IAction[] {
 		return [
-			this.instantiationService.createInstance(dbgactions.AddFunctionBreakpointAction, dbgactions.AddFunctionBreakpointAction.ID, dbgactions.AddFunctionBreakpointAction.LABEL),
-			this.instantiationService.createInstance(dbgactions.ReapplyBreakpointsAction, dbgactions.ReapplyBreakpointsAction.ID, dbgactions.ReapplyBreakpointsAction.LABEL),
-			this.instantiationService.createInstance(dbgactions.ToggleBreakpointsActivatedAction, dbgactions.ToggleBreakpointsActivatedAction.ID, dbgactions.ToggleBreakpointsActivatedAction.LABEL),
-			this.instantiationService.createInstance(dbgactions.RemoveAllBreakpointsAction, dbgactions.RemoveAllBreakpointsAction.ID, dbgactions.RemoveAllBreakpointsAction.LABEL)
+			this.instantiationService.createInstance(debugactions.AddFunctionBreakpointAction, debugactions.AddFunctionBreakpointAction.ID, debugactions.AddFunctionBreakpointAction.LABEL),
+			this.instantiationService.createInstance(debugactions.ReapplyBreakpointsAction, debugactions.ReapplyBreakpointsAction.ID, debugactions.ReapplyBreakpointsAction.LABEL),
+			this.instantiationService.createInstance(debugactions.ToggleBreakpointsActivatedAction, debugactions.ToggleBreakpointsActivatedAction.ID, debugactions.ToggleBreakpointsActivatedAction.LABEL),
+			this.instantiationService.createInstance(debugactions.RemoveAllBreakpointsAction, debugactions.RemoveAllBreakpointsAction.ID, debugactions.RemoveAllBreakpointsAction.LABEL)
 		];
 	}
 
@@ -472,6 +472,14 @@ export class DebugViewlet extends viewlet.Viewlet {
 		}
 	}
 
+	public focus(): void {
+		super.focus();
+
+		if (this.views.length > 0) {
+			(<VariablesView>this.views[0]).focus();
+		}
+	}
+
 	public getActions(): actions.IAction[] {
 		if (this.debugService.getState() === debug.State.Disabled) {
 			return [];
@@ -479,10 +487,10 @@ export class DebugViewlet extends viewlet.Viewlet {
 
 		if (!this.actions) {
 			this.actions = [
-				this.instantiationService.createInstance(dbgactions.StartDebugAction, dbgactions.StartDebugAction.ID, dbgactions.StartDebugAction.LABEL),
-				this.instantiationService.createInstance(dbgactions.SelectConfigAction, dbgactions.SelectConfigAction.ID, dbgactions.SelectConfigAction.LABEL),
-				this.instantiationService.createInstance(dbgactions.ConfigureAction, dbgactions.ConfigureAction.ID, dbgactions.ConfigureAction.LABEL),
-				this.instantiationService.createInstance(dbgactions.OpenReplAction, dbgactions.OpenReplAction.ID, dbgactions.OpenReplAction.LABEL)
+				this.instantiationService.createInstance(debugactions.StartDebugAction, debugactions.StartDebugAction.ID, debugactions.StartDebugAction.LABEL),
+				this.instantiationService.createInstance(debugactions.SelectConfigAction, debugactions.SelectConfigAction.ID, debugactions.SelectConfigAction.LABEL),
+				this.instantiationService.createInstance(debugactions.ConfigureAction, debugactions.ConfigureAction.ID, debugactions.ConfigureAction.LABEL),
+				this.instantiationService.createInstance(debugactions.ToggleReplAction, debugactions.ToggleReplAction.ID, debugactions.ToggleReplAction.LABEL)
 			];
 
 			this.actions.forEach(a => {
@@ -494,15 +502,11 @@ export class DebugViewlet extends viewlet.Viewlet {
 	}
 
 	public getActionItem(action: actions.IAction): actionbar.IActionItem {
-		if (action.id === dbgactions.SelectConfigAction.ID) {
+		if (action.id === debugactions.SelectConfigAction.ID) {
 			return this.instantiationService.createInstance(dbgactionitems.SelectConfigActionItem, action);
 		}
 
 		return null;
-	}
-
-	public getSecondaryActions(): actions.IAction[] {
-		return [];
 	}
 
 	private onDebugServiceStateChange(): void {

@@ -15,8 +15,9 @@ import uuid = require('vs/base/common/uuid');
 import {IQuickNavigateConfiguration, IAutoFocus, IContext, IModel, Mode} from 'vs/base/parts/quickopen/common/quickOpen';
 import {Filter, Renderer, DataSource, IModelProvider} from 'vs/base/parts/quickopen/browser/quickOpenViewer';
 import {Dimension, Builder, $} from 'vs/base/browser/builder';
-import {ISelectionEvent, IFocusEvent, ITree, ContextMenuEvent} from 'vs/base/parts/tree/common/tree';
-import {InputBox} from 'vs/base/browser/ui/inputbox/inputBox';
+import {ISelectionEvent, IFocusEvent, ITree, ContextMenuEvent} from 'vs/base/parts/tree/browser/tree';
+import {InputBox, MessageType} from 'vs/base/browser/ui/inputbox/inputBox';
+import Severity from 'vs/base/common/severity';
 import {Tree} from 'vs/base/parts/tree/browser/treeImpl';
 import {ProgressBar} from 'vs/base/browser/ui/progressbar/progressbar';
 import {StandardKeyboardEvent} from 'vs/base/browser/keyboardEvent';
@@ -49,7 +50,7 @@ export interface IQuickOpenUsageLogger {
 
 export class QuickOpenController extends DefaultController {
 
-	public onContextMenu(tree:ITree, element: any, event:ContextMenuEvent):boolean {
+	public onContextMenu(tree: ITree, element: any, event: ContextMenuEvent): boolean {
 		if (platform.isMacintosh) {
 			return this.onLeftClick(tree, element, event); // https://github.com/Microsoft/vscode/issues/1011
 		}
@@ -111,9 +112,9 @@ export class QuickOpenWidget implements IModelProvider {
 					this.hide(true);
 				}
 			})
-			.on(DOM.EventType.CONTEXT_MENU, (e: Event) => DOM.EventHelper.stop(e, true)) // Do this to fix an issue on Mac where the menu goes into the way
-			.on(DOM.EventType.FOCUS, (e: Event) => this.gainingFocus(), null, true)
-			.on(DOM.EventType.BLUR, (e: Event) => this.loosingFocus(e), null, true);
+				.on(DOM.EventType.CONTEXT_MENU, (e: Event) => DOM.EventHelper.stop(e, true)) // Do this to fix an issue on Mac where the menu goes into the way
+				.on(DOM.EventType.FOCUS, (e: Event) => this.gainingFocus(), null, true)
+				.on(DOM.EventType.BLUR, (e: Event) => this.loosingFocus(e), null, true);
 
 			// Progress Bar
 			this.progressBar = new ProgressBar(div.clone());
@@ -129,8 +130,14 @@ export class QuickOpenWidget implements IModelProvider {
 				DOM.addDisposableListener(this.inputBox.inputElement, DOM.EventType.KEY_DOWN, (e: KeyboardEvent) => {
 					let keyboardEvent: StandardKeyboardEvent = new StandardKeyboardEvent(e);
 
+
+					// Do not handle Tab: It is used to navigate between elements without mouse
+					if (keyboardEvent.keyCode === KeyCode.Tab) {
+						return;
+					}
+
 					// Pass tree navigation keys to the tree but leave focus in input field
-					if (keyboardEvent.keyCode === KeyCode.Tab || keyboardEvent.keyCode === KeyCode.DownArrow || keyboardEvent.keyCode === KeyCode.UpArrow || keyboardEvent.keyCode === KeyCode.PageDown || keyboardEvent.keyCode === KeyCode.PageUp) {
+					else if (keyboardEvent.keyCode === KeyCode.Tab || keyboardEvent.keyCode === KeyCode.DownArrow || keyboardEvent.keyCode === KeyCode.UpArrow || keyboardEvent.keyCode === KeyCode.PageDown || keyboardEvent.keyCode === KeyCode.PageUp) {
 						DOM.EventHelper.stop(e, true);
 
 						this.navigateInTree(keyboardEvent.keyCode, keyboardEvent.shiftKey);
@@ -258,7 +265,7 @@ export class QuickOpenWidget implements IModelProvider {
 				clone();
 		})
 
-		// Widget Attributes
+			// Widget Attributes
 			.addClass('quick-open-widget')
 			.addClass((browser.isIE10orEarlier) ? ' no-shadow' : '')
 			.build(this.container);
@@ -749,6 +756,18 @@ export class QuickOpenWidget implements IModelProvider {
 		return this.tree.getInput();
 	}
 
+	public showInputDecoration(decoration: Severity): void {
+		if (this.inputBox) {
+			this.inputBox.showMessage({ type: decoration === Severity.Info ? MessageType.INFO : decoration === Severity.Warning ? MessageType.WARNING : MessageType.ERROR, content: '' });
+		}
+	}
+
+	public clearInputDecoration(): void {
+		if (this.inputBox) {
+			this.inputBox.hideMessage();
+		}
+	}
+
 	public runFocus(): boolean {
 		let focus = this.tree.getFocus();
 		if (focus) {
@@ -812,7 +831,6 @@ export class QuickOpenWidget implements IModelProvider {
 
 		const relatedTarget = (<any>e).relatedTarget;
 		if (!this.quickNavigateConfiguration && DOM.isAncestor(relatedTarget, this.builder.getHTMLElement())) {
-			this.inputBox.focus(); // user clicked somewhere into quick open, so we restore focus to input
 			return;
 		}
 

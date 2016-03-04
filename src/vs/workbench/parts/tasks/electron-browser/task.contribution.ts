@@ -53,7 +53,7 @@ import { IJSONSchema } from 'vs/base/common/jsonSchema';
 
 import { IWorkbenchContribution, IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions } from 'vs/workbench/common/contributions';
 
-import workbenchActionRegistry = require('vs/workbench/browser/actionRegistry');
+import workbenchActionRegistry = require('vs/workbench/common/actionRegistry');
 import statusbar = require('vs/workbench/browser/parts/statusbar/statusbar');
 import QuickOpen = require('vs/workbench/browser/quickopen');
 
@@ -214,7 +214,7 @@ class ConfigureTaskRunnerAction extends Action {
 					forceOpen: true
 				}
 			}, sideBySide).then((value) => {
-				this.outputService.showOutput(TaskService.OutputChannel, true, true);
+				this.outputService.showOutput(TaskService.OutputChannel, true);
 				return value;
 			});
 		}, (error) => {
@@ -531,7 +531,7 @@ class TaskService extends EventEmitter implements ITaskService {
 					}
 					if (isAffected) {
 						this.outputService.append(TaskService.OutputChannel, nls.localize('TaskSystem.invalidTaskJson', 'Error: The content of the tasks.json file has syntax errors. Please correct them before executing a task.\n'));
-						this.outputService.showOutput(TaskService.OutputChannel, true, true);
+						this.outputService.showOutput(TaskService.OutputChannel, true);
 						return TPromise.wrapError({});
 					}
 				}
@@ -605,7 +605,7 @@ class TaskService extends EventEmitter implements ITaskService {
 				result = false;
 				this.outputService.append(TaskService.OutputChannel, line + '\n');
 			});
-			this.outputService.showOutput(TaskService.OutputChannel, true, true);
+			this.outputService.showOutput(TaskService.OutputChannel, true);
 		}
 		return result;
 	}
@@ -761,7 +761,7 @@ class TaskService extends EventEmitter implements ITaskService {
 			this.messageService.show(Severity.Error, nls.localize('TaskSystem.unknownError', 'An error has occurred while running a task. See task log for details.'));
 		}
 		if (showOutput) {
-			this.outputService.showOutput(TaskService.OutputChannel, false, true);
+			this.outputService.showOutput(TaskService.OutputChannel, true);
 		}
 	}
 }
@@ -969,6 +969,11 @@ if (Env.enableTasks) {
 							'type': 'string',
 							'enum': ['error', 'warning', 'info'],
 							'description': nls.localize('JsonSchema.problemMatcher.severity', 'The default severity for captures problems. Is used if the pattern doesn\' define a match group for severity.')
+						},
+						'applyTo': {
+							'type': 'string',
+							'enum': ['allDocuments', 'openDocuments', 'closedDocuments'],
+							'description': nls.localize('JsonSchema.problemMatcher.applyTo', 'Controls if a problem reported on a text document is applied only to open, closed or all documents.')
 						},
 						'pattern': {
 							'$ref': '#/definitions/patternType',

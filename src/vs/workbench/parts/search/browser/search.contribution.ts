@@ -7,7 +7,7 @@
 
 import 'vs/css!./media/search.contribution';
 import {Registry} from 'vs/platform/platform';
-import {IViewletRegistry, Extensions as ViewletExtensions, ViewletDescriptor, ToggleViewletAction} from 'vs/workbench/browser/viewlet';
+import {ViewletRegistry, Extensions as ViewletExtensions, ViewletDescriptor, ToggleViewletAction} from 'vs/workbench/browser/viewlet';
 import {IConfigurationRegistry, Extensions as ConfigurationExtensions} from 'vs/platform/configuration/common/configurationRegistry';
 import nls = require('vs/nls');
 import {IAction} from 'vs/base/common/actions';
@@ -15,7 +15,7 @@ import {asFileResource} from 'vs/workbench/parts/files/common/files';
 import {SyncActionDescriptor, DeferredAction} from 'vs/platform/actions/common/actions';
 import {Separator} from 'vs/base/browser/ui/actionbar/actionbar';
 import {Scope, IActionBarRegistry, Extensions as ActionBarExtensions, ActionBarContributor} from 'vs/workbench/browser/actionBarRegistry';
-import {IWorkbenchActionRegistry, Extensions as ActionExtensions} from 'vs/workbench/browser/actionRegistry';
+import {IWorkbenchActionRegistry, Extensions as ActionExtensions} from 'vs/workbench/common/actionRegistry';
 import {QuickOpenHandlerDescriptor, IQuickOpenRegistry, Extensions as QuickOpenExtensions} from 'vs/workbench/browser/quickopen';
 import {QuickOpenAction} from 'vs/workbench/browser/actions/quickOpenAction';
 import {KeybindingsRegistry} from 'vs/platform/keybinding/common/keybindingsRegistry';
@@ -110,7 +110,7 @@ class ShowAllSymbolsAction extends QuickOpenAction {
 }
 
 // Register Viewlet
-(<IViewletRegistry>Registry.as(ViewletExtensions.Viewlets)).registerViewlet(new ViewletDescriptor(
+(<ViewletRegistry>Registry.as(ViewletExtensions.Viewlets)).registerViewlet(new ViewletDescriptor(
 	'vs/workbench/parts/search/browser/searchViewlet',
 	'SearchViewlet',
 	VIEWLET_ID,
@@ -196,11 +196,6 @@ configurationRegistry.registerConfiguration({
 					}
 				]
 			}
-		},
-		'filePicker.alternateFileNameMatching': {
-			'type': 'boolean',
-			'default': false,
-			'description': nls.localize('enableFuzzy', "Experimental support for fuzzy matching of file names in the file picker.")
 		}
 	}
 });

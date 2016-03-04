@@ -176,7 +176,7 @@ function _matchesCamelCase(word: string, camelCaseWord: string, i: number, j: nu
 // Heuristic to avoid computing camel case matcher for words that don't
 // look like camelCaseWords.
 function isCamelCaseWord(word: string): boolean {
-	if (word.length > 40) {
+	if (word.length > 60) {
 		return false;
 	}
 
@@ -185,9 +185,9 @@ function isCamelCaseWord(word: string): boolean {
 	for (let i = 0; i < word.length; i++) {
 		code = word.charCodeAt(i);
 
-		isUpper(code) && upper++;
-		isLower(code) && lower++;
-		isAlphanumeric(code) && alpha++;
+		if (isUpper(code)) upper++;
+		if (isLower(code)) lower++;
+		if (isAlphanumeric(code)) alpha++;
 	}
 
 	let upperPercent = upper / word.length;
@@ -205,9 +205,9 @@ function isCamelCasePattern(word: string): boolean {
 	for (let i = 0; i < word.length; i++) {
 		code = word.charCodeAt(i);
 
-		isUpper(code) && upper++;
-		isLower(code) && lower++;
-		isWhitespace(code) && whitespace++;
+		if (isUpper(code)) upper++;
+		if (isLower(code)) lower++;
+		if (isWhitespace(code)) whitespace++;
 	}
 
 	if ((upper === 0 || lower === 0) && whitespace === 0) {

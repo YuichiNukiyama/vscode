@@ -70,6 +70,11 @@ export class EventType {
 	static EDITOR_SET_INPUT_ERROR = 'editorSetInputError';
 
 	/**
+	 * Event type for when the editor position has been changed
+	 */
+	static EDITOR_POSITION_CHANGED = 'editorPositionChanged';
+
+	/**
 	 * An event type that fires when a text editor changes its selection.
 	 */
 	static TEXT_EDITOR_SELECTION_CHANGED = 'textEditorSelectionChanged';
@@ -90,19 +95,19 @@ export class EventType {
 	static TEXT_EDITOR_CONFIGURATION_CHANGED = 'textEditorOptionsChanged';
 
 	/**
-	 * Event type for when a viewlet is about to open.
+	 * Event type for when a composite is about to open.
 	 */
-	static VIEWLET_OPENING = 'viewletOpening';
+	static COMPOSITE_OPENING = 'compositeOpening';
 
 	/**
 	 * Event type for when a viewlet is opened.
 	 */
-	static VIEWLET_OPENED = 'viewletOpened';
+	static COMPOSITE_OPENED = 'compositeOpened';
 
 	/**
-	 * Event type for when a viewlet is closed.
+	 * Event type for when a composite is closed.
 	 */
-	static VIEWLET_CLOSED = 'viewletClosed';
+	static COMPOSITE_CLOSED = 'compositeClosed';
 
 	/**
 	 * Event type for when the workbench has been fully created.
@@ -229,15 +234,15 @@ export class CommandEvent extends Event {
 }
 
 /**
- * Viewlet events are emitted when a viewlet opens or closes in the sidebar.
+ * Composite events are emitted when a composite opens or closes in the sidebar or panel.
  */
-export class ViewletEvent extends Event {
-	public viewletId: string;
+export class CompositeEvent extends Event {
+	public compositeId: string;
 
-	constructor(viewletId: string, originalEvent?: any) {
+	constructor(compositeId: string, originalEvent?: any) {
 		super(originalEvent);
 
-		this.viewletId = viewletId;
+		this.compositeId = compositeId;
 	}
 }
 

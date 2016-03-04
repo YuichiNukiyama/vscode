@@ -5,7 +5,7 @@
 
 import errors = require('vs/base/common/errors');
 import dom = require('vs/base/browser/dom');
-import { ITree } from 'vs/base/parts/tree/common/tree';
+import { ITree } from 'vs/base/parts/tree/browser/tree';
 import { Tree } from 'vs/base/parts/tree/browser/treeImpl';
 import { DefaultController, ICancelableEvent } from 'vs/base/parts/tree/browser/treeDefaults';
 import editorbrowser = require('vs/editor/browser/editorBrowser');
@@ -16,9 +16,10 @@ import viewer = require('vs/workbench/parts/debug/browser/debugViewer');
 
 const $ = dom.emmet;
 const debugTreeOptions = {
-	indentPixels: 8,
-	twistiePixels: 10
+	indentPixels: 6,
+	twistiePixels: 12
 };
+const MAX_ELEMENTS_SHOWN = 18;
 
 export class DebugHoverWidget implements editorbrowser.IContentWidget {
 
@@ -43,6 +44,13 @@ export class DebugHoverWidget implements editorbrowser.IContentWidget {
 			renderer: this.instantiationService.createInstance(VariablesHoverRenderer),
 			controller: new DebugHoverController()
 		}, debugTreeOptions);
+		this.tree.addListener2('item:expanded', () => {
+			this.layoutTree();
+		});
+		this.tree.addListener2('item:collapsed', () => {
+			this.layoutTree();
+		});
+
 		this.valueContainer = dom.append(this.domNode, $('.debug-hover-value'));
 
 		this.isVisible = false;
@@ -63,15 +71,17 @@ export class DebugHoverWidget implements editorbrowser.IContentWidget {
 
 	public showAt(range: editorcommon.IEditorRange): void {
 		const pos = range.getStartPosition();
-		const wordAtPosition = this.editor.getModel().getWordAtPosition(pos);
+		const model = this.editor.getModel();
+		const wordAtPosition = model.getWordAtPosition(pos);
 		const hoveringOver = wordAtPosition ? wordAtPosition.word : null;
 		const focusedStackFrame = this.debugService.getViewModel().getFocusedStackFrame();
-		if (!hoveringOver || !focusedStackFrame || (this.isVisible && hoveringOver === this.lastHoveringOver)) {
+		if (!hoveringOver || !focusedStackFrame || (this.isVisible && hoveringOver === this.lastHoveringOver) ||
+			(focusedStackFrame.source.uri.toString() !== model.getAssociatedResource().toString())) {
 			return;
 		}
 
 		// string magic to get the parents of the variable (a and b for a.b.foo)
-		const lineContent = this.editor.getModel().getLineContent(pos.lineNumber);
+		const lineContent = model.getLineContent(pos.lineNumber);
 		const namesToFind = lineContent.substring(0, lineContent.indexOf('.' + hoveringOver))
 			.split('.').map(word => word.trim()).filter(word => !!word);
 		namesToFind.push(hoveringOver);
@@ -132,8 +142,9 @@ export class DebugHoverWidget implements editorbrowser.IContentWidget {
 		if (expression.reference > 0) {
 			this.valueContainer.hidden = true;
 			this.treeContainer.hidden = false;
-			this.tree.setInput(expression).done(null, errors.onUnexpectedError);
-			this.tree.layout(this.treeContainer.clientHeight);
+			this.tree.setInput(expression).then(() => {
+				this.layoutTree();
+			}).done(null, errors.onUnexpectedError);
 		} else {
 			this.treeContainer.hidden = true;
 			this.valueContainer.hidden = false;
@@ -143,6 +154,20 @@ export class DebugHoverWidget implements editorbrowser.IContentWidget {
 		this.showAtPosition = position;
 		this.isVisible = true;
 		this.editor.layoutContentWidget(this);
+	}
+
+	private layoutTree(): void {
+		const navigator = this.tree.getNavigator();
+		let visibleElementsCount = 0;
+		while (navigator.next()) {
+			visibleElementsCount++;
+		}
+		const height = Math.min(visibleElementsCount, MAX_ELEMENTS_SHOWN) * 18;
+
+		if (this.treeContainer.clientHeight !== height) {
+			this.treeContainer.style.height = `${ height }px`;
+			this.tree.layout();
+		}
 	}
 
 	public hide(): void {

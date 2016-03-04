@@ -486,22 +486,38 @@ export class VSCodeMenu {
 	}
 
 	private setViewMenu(viewMenu: Electron.Menu): void {
+		let explorer = this.createMenuItem(nls.localize('miViewExplorer', "&&Explorer"), 'workbench.view.explorer');
+		let search = this.createMenuItem(nls.localize('miViewSearch', "&&Search"), 'workbench.view.search');
+		let git = this.createMenuItem(nls.localize('miViewGit', "&&Git"), 'workbench.view.git');
+		let debug = this.createMenuItem(nls.localize('miViewDebug', "&&Debug"), 'workbench.view.debug');
+
 		let commands = this.createMenuItem(nls.localize('miCommandPalette', "&&Command Palette..."), 'workbench.action.showCommands');
 		let markers = this.createMenuItem(nls.localize('miMarker', "&&Errors and Warnings..."), 'workbench.action.showErrorsWarnings');
+
 		let output = this.createMenuItem(nls.localize('miToggleOutput', "Toggle &&Output"), 'workbench.action.output.toggleOutput');
+		let debugConsole = this.createMenuItem(nls.localize('miToggleDebugConsole', "Toggle De&&bug Console"), 'workbench.debug.action.toggleRepl');
 
 		let fullscreen = new MenuItem({ label: mnemonicLabel(nls.localize('miToggleFullScreen', "Toggle &&Full Screen")), accelerator: this.getAccelerator('workbench.action.toggleFullScreen'), click: () => windows.manager.getLastActiveWindow().toggleFullScreen(), enabled: windows.manager.getWindowCount() > 0 });
 		let toggleMenuBar = this.createMenuItem(nls.localize('miToggleMenuBar', "Toggle Menu &&Bar"), 'workbench.action.toggleMenuBar');
 		let splitEditor = this.createMenuItem(nls.localize('miSplitEditor', "Split &&Editor"), 'workbench.action.splitEditor');
 		let toggleSidebar = this.createMenuItem(nls.localize('miToggleSidebar', "&&Toggle Side Bar"), 'workbench.action.toggleSidebarVisibility');
 		let moveSidebar = this.createMenuItem(nls.localize('miMoveSidebar', "&&Move Side Bar"), 'workbench.action.toggleSidebarPosition');
+		let togglePanel = this.createMenuItem(nls.localize('miTogglePanel', "Toggle &&Panel"), 'workbench.action.togglePanel');
 
 		let zoomIn = this.createMenuItem(nls.localize('miZoomIn', "&&Zoom in"), 'workbench.action.zoomIn');
 		let zoomOut = this.createMenuItem(nls.localize('miZoomOut', "Zoom o&&ut"), 'workbench.action.zoomOut');
+
 		arrays.coalesce([
+			explorer,
+			search,
+			git,
+			debug,
+			__separator__(),
 			commands,
 			markers,
+			__separator__(),
 			output,
+			debugConsole,
 			__separator__(),
 			fullscreen,
 			platform.isWindows || platform.isLinux ? toggleMenuBar : void 0,
@@ -509,6 +525,7 @@ export class VSCodeMenu {
 			splitEditor,
 			toggleSidebar,
 			moveSidebar,
+			togglePanel,
 			__separator__(),
 			zoomIn,
 			zoomOut
@@ -654,7 +671,7 @@ export class VSCodeMenu {
 					return;
 				}
 
-				if (windowInFocus.win.webContents.isDevToolsFocused()) {
+				if (windowInFocus.win.isDevToolsFocused()) {
 					devToolsFocusedFn(windowInFocus.win.devToolsWebContents);
 				} else {
 					windows.manager.sendToFocused('vscode:runAction', actionId);

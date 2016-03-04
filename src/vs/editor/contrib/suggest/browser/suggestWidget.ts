@@ -11,8 +11,8 @@ import { TPromise } from 'vs/base/common/winjs.base';
 import { IDisposable, disposeAll } from 'vs/base/common/lifecycle';
 import { assign } from 'vs/base/common/objects';
 import Event, { Emitter } from 'vs/base/common/event';
-import { append, addClass, removeClass, emmet as $ } from 'vs/base/browser/dom';
-import * as Tree from 'vs/base/parts/tree/common/tree';
+import { append, addClass, removeClass, toggleClass, emmet as $, hide, show, addDisposableListener } from 'vs/base/browser/dom';
+import * as Tree from 'vs/base/parts/tree/browser/tree';
 import * as TreeImpl from 'vs/base/parts/tree/browser/treeImpl';
 import * as TreeDefaults from 'vs/base/parts/tree/browser/treeDefaults';
 import * as HighlightedLabel from 'vs/base/browser/ui/highlightedlabel/highlightedLabel';
@@ -24,22 +24,19 @@ import * as Timer from 'vs/base/common/timer';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { SuggestRegistry, CONTEXT_SUGGESTION_SUPPORTS_ACCEPT_ON_KEY } from '../common/suggest';
 import { IKeybindingService, IKeybindingContextKey } from 'vs/platform/keybinding/common/keybindingService';
-import { ISuggestSupport, ISuggestResult, ISuggestion, ISuggestionCompare, ISuggestionFilter } from 'vs/editor/common/modes';
+import { ISuggestSupport, ISuggestResult, ISuggestion, ISuggestionFilter } from 'vs/editor/common/modes';
 import { DefaultFilter, IMatch } from 'vs/editor/common/modes/modesFilters';
 import { ISuggestResult2 } from '../common/suggest';
 import URI from 'vs/base/common/uri';
 import { isFalsyOrEmpty } from 'vs/base/common/arrays';
 import { onUnexpectedError, isPromiseCanceledError, illegalArgument } from 'vs/base/common/errors';
-
-const defaultCompare: ISuggestionCompare = (a, b) => {
-	return (a.sortText || a.label).localeCompare((b.sortText || b.label));
-}
+import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 
 class CompletionItem {
 
 	private static _idPool: number = 0;
 
-	id: string;
+	id: number;
 	suggestion: ISuggestion;
 	highlights: IMatch[];
 	support: ISuggestSupport;
@@ -48,7 +45,7 @@ class CompletionItem {
 	private _resolveDetails: TPromise<CompletionItem>
 
 	constructor(public group: CompletionGroup, suggestion: ISuggestion, container: ISuggestResult2) {
-		this.id = '_completion_item_#' + CompletionItem._idPool++;
+		this.id = CompletionItem._idPool++;
 		this.support = container.support;
 		this.suggestion = suggestion;
 		this.container = container;
@@ -78,7 +75,6 @@ class CompletionGroup {
 	incomplete: boolean;
 	items: CompletionItem[];
 	size: number;
-	compare: ISuggestionCompare;
 	filter: ISuggestionFilter;
 
 	constructor(public model: CompletionModel, public index: number, raw: ISuggestResult2[]) {
@@ -95,14 +91,12 @@ class CompletionGroup {
 			);
 		}, []);
 
-		this.compare = defaultCompare;
 		this.filter = DefaultFilter;
 
 		if (this.items.length > 0) {
 			const [first] = this.items;
 
 			if (first.support) {
-				this.compare = first.support.getSorter && first.support.getSorter() || this.compare;
 				this.filter = first.support.getFilter && first.support.getFilter() || this.filter;
 			}
 		}
@@ -174,7 +168,7 @@ class DataSource implements Tree.IDataSource {
 		} else if (element instanceof CompletionModel) {
 			return 'root';
 		} else if (element instanceof CompletionItem) {
-			return (<CompletionItem>element).id;
+			return (<CompletionItem>element).id.toString();
 		}
 
 		throw illegalArgument('element');
@@ -249,7 +243,19 @@ class Sorter implements Tree.ISorter {
 			return result;
 		}
 
-		return group.compare(item.suggestion, otherItem.suggestion);
+		return Sorter.suggestionCompare(item.suggestion, otherItem.suggestion);
+	}
+
+	private static suggestionCompare(a: ISuggestion, b: ISuggestion): number {
+		let cmp = 0;
+		if (typeof a.sortText === 'string' && typeof b.sortText === 'string') {
+			cmp = a.sortText.localeCompare(b.sortText);
+		}
+		if (cmp === 0) {
+			cmp = a.label.localeCompare(b.label);
+
+		}
+		return cmp;
 	}
 }
 
@@ -263,10 +269,21 @@ interface ISuggestionTemplateData {
 	colorspan: HTMLElement;
 	highlightedLabel: HighlightedLabel.HighlightedLabel;
 	typeLabel: HTMLElement;
+	documentationDetails: HTMLElement;
 	documentation: HTMLElement;
 }
 
 class Renderer implements Tree.IRenderer {
+
+	private triggerKeybindingLabel: string;
+
+	constructor(
+		private widget: SuggestWidget,
+		@IKeybindingService keybindingService: IKeybindingService
+	) {
+		const keybindings = keybindingService.lookupKeybindings('editor.action.triggerSuggest');
+		this.triggerKeybindingLabel = keybindings.length === 0 ? '' : ` (${keybindingService.getLabelFor(keybindings[0])})`;
+	}
 
 	public getHeight(tree: Tree.ITree, element: any): number {
 		if (element instanceof CompletionItem) {
@@ -300,7 +317,10 @@ class Renderer implements Tree.IRenderer {
 		const main = append(text, $('.main'));
 		data.highlightedLabel = new HighlightedLabel.HighlightedLabel(main);
 		data.typeLabel = append(main, $('span.type-label'));
-		data.documentation = append(text, $('.docs'));
+		const docs = append(text, $('.docs'));
+		data.documentation = append(docs, $('span.docs-text'));
+		data.documentationDetails = append(docs, $('span.docs-details.octicon.octicon-info'));
+		data.documentationDetails.title = nls.localize('readMore', "Read More...{0}", this.triggerKeybindingLabel);
 
 		return data;
 	}
@@ -327,6 +347,19 @@ class Renderer implements Tree.IRenderer {
 		data.highlightedLabel.set(suggestion.label, (<CompletionItem>element).highlights);
 		data.typeLabel.textContent = suggestion.typeLabel || '';
 		data.documentation.textContent = suggestion.documentationLabel || '';
+
+		if (suggestion.documentationLabel) {
+			show(data.documentationDetails);
+
+			data.documentationDetails.onclick = e => {
+				e.stopPropagation();
+				e.preventDefault();
+				this.widget.toggleDetails();
+			};
+		} else {
+			hide(data.documentationDetails);
+			data.documentationDetails.onclick = null;
+		}
 	}
 
 	public disposeTemplate(tree: Tree.ITree, templateId: string, templateData: any): void {
@@ -367,11 +400,76 @@ interface ITelemetryData {
 
 enum State {
 	Hidden,
-	Triggered,
 	Loading,
 	Empty,
 	Open,
-	Frozen
+	Frozen,
+	Details
+}
+
+class SuggestionDetails {
+
+	private el: HTMLElement;
+	private title: HTMLElement;
+	private back: HTMLElement;
+	private body: HTMLElement;
+	private type: HTMLElement;
+	private docs: HTMLElement;
+
+	constructor(container: HTMLElement, private widget: SuggestWidget) {
+		this.el = append(container, $('.details'));
+		const header = append(this.el, $('.header'));
+		this.title = append(header, $('span.title'));
+		this.back = append(header, $('span.go-back.octicon.octicon-x'));
+		this.back.title = nls.localize('goback', "Go back");
+		this.body = append(this.el, $('.body'));
+		this.type = append(this.body, $('p.type'));
+		this.docs = append(this.body, $('p.docs'));
+		addDisposableListener(this.docs, 'mousewheel', e => e.stopPropagation());
+	}
+
+	get element() {
+		return this.el;
+	}
+
+	render(item: CompletionItem): void {
+		if (!item) {
+			this.title.textContent = '';
+			this.type.textContent = '';
+			this.docs.textContent = '';
+			return;
+		}
+
+		this.title.innerText = item.suggestion.label;
+		this.type.innerText = item.suggestion.typeLabel;
+		this.docs.innerText = item.suggestion.documentationLabel;
+		this.back.onclick = e => {
+			e.preventDefault();
+			e.stopPropagation();
+			this.widget.toggleDetails();
+		};
+	}
+
+	scrollDown(much = 8): void {
+		this.body.scrollTop += much;
+	}
+
+	scrollUp(much = 8): void {
+		this.body.scrollTop -= much;
+	}
+
+	pageDown(): void {
+		this.scrollDown(80);
+	}
+
+	pageUp(): void {
+		this.scrollUp(80);
+	}
+
+	dispose(): void {
+		this.el.parentElement.removeChild(this.el);
+		this.el = null;
+	}
 }
 
 export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable {
@@ -399,6 +497,7 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 	private element: HTMLElement;
 	private messageElement: HTMLElement;
 	private treeElement: HTMLElement;
+	private details: SuggestionDetails;
 	private tree: Tree.ITree;
 	private renderer: Renderer;
 
@@ -411,7 +510,8 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		private editor: EditorBrowser.ICodeEditor,
 		private model: SuggestModel,
 		@IKeybindingService keybindingService: IKeybindingService,
-		@ITelemetryService telemetryService: ITelemetryService
+		@ITelemetryService telemetryService: ITelemetryService,
+		@IInstantiationService instantiationService: IInstantiationService
 	) {
 		this.isAuto = false;
 		this.oldFocus = null;
@@ -430,11 +530,12 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		}
 
 		this.messageElement = append(this.element, $('.message'));
-		this.messageElement.style.display = 'none';
 		this.treeElement = append(this.element, $('.tree'));
+		this.details = new SuggestionDetails(this.element, this);
+		this.renderer = instantiationService.createInstance(Renderer, this);
 
 		const configuration = {
-			renderer: this.renderer = new Renderer(),
+			renderer: this.renderer,
 			dataSource: new DataSource(),
 			controller: new Controller(),
 			filter: new Filter(() => this.state),
@@ -479,7 +580,7 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 
 	private onEditorBlur(): void {
 		TPromise.timeout(150).done(() => {
-			if (this.tree && !this.tree.isDOMFocused()) {
+			if (!this.editor.isFocused()) {
 				this.setState(State.Hidden);
 			}
 		});
@@ -553,38 +654,35 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 	private setState(state: State): void {
 		this.state = state;
 
+		toggleClass(this.element, 'frozen', state === State.Frozen);
+
 		switch (state) {
 			case State.Hidden:
-				this.messageElement.style.display = 'none';
-				this.treeElement.style.display = 'block';
-				this.hide();
-				return;
-			case State.Triggered:
-				this.messageElement.style.display = 'none';
-				this.treeElement.style.display = 'block';
+				hide(this.messageElement, this.details.element);
+				show(this.treeElement);
 				this.hide();
 				return;
 			case State.Loading:
 				this.messageElement.innerText = SuggestWidget.LOADING_MESSAGE;
-				this.messageElement.style.display = 'block';
-				this.treeElement.style.display = 'none';
-				removeClass(this.element, 'frozen');
+				hide(this.treeElement, this.details.element);
+				show(this.messageElement);
 				break;
 			case State.Empty:
 				this.messageElement.innerText = SuggestWidget.NO_SUGGESTIONS_MESSAGE;
-				this.messageElement.style.display = 'block';
-				this.treeElement.style.display = 'none';
-				removeClass(this.element, 'frozen');
+				hide(this.treeElement, this.details.element);
+				show(this.messageElement);
 				break;
 			case State.Open:
-				this.messageElement.style.display = 'none';
-				this.treeElement.style.display = 'block';
-				removeClass(this.element, 'frozen');
+				hide(this.messageElement, this.details.element);
+				show(this.treeElement);
 				break;
 			case State.Frozen:
-				this.messageElement.style.display = 'none';
-				this.treeElement.style.display = 'block';
-				addClass(this.element, 'frozen');
+				hide(this.messageElement, this.details.element);
+				show(this.treeElement);
+				break;
+			case State.Details:
+				hide(this.messageElement, this.treeElement);
+				show(this.details.element);
 				break;
 		}
 
@@ -749,7 +847,9 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		switch (this.state) {
 			case State.Hidden:
 				return false;
-			case State.Triggered:
+			case State.Details:
+				this.details.pageDown();
+				return true;
 			case State.Loading:
 				return !this.isAuto;
 			default:
@@ -762,7 +862,9 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		switch (this.state) {
 			case State.Hidden:
 				return false;
-			case State.Triggered:
+			case State.Details:
+				this.details.scrollDown();
+				return true;
 			case State.Loading:
 				return !this.isAuto;
 			default:
@@ -779,7 +881,9 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		switch (this.state) {
 			case State.Hidden:
 				return false;
-			case State.Triggered:
+			case State.Details:
+				this.details.pageUp();
+				return true;
 			case State.Loading:
 				return !this.isAuto;
 			default:
@@ -792,7 +896,9 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		switch (this.state) {
 			case State.Hidden:
 				return false;
-			case State.Triggered:
+			case State.Details:
+				this.details.scrollUp();
+				return true;
 			case State.Loading:
 				return !this.isAuto;
 			default:
@@ -809,7 +915,6 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		switch (this.state) {
 			case State.Hidden:
 				return false;
-			case State.Triggered:
 			case State.Loading:
 				return !this.isAuto;
 			default:
@@ -823,9 +928,31 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		}
 	}
 
+	public toggleDetails(): void {
+		if (this.state === State.Details) {
+			this.setState(State.Open);
+			this.editor.focus();
+			return;
+		}
+
+		if (this.state !== State.Open) {
+			return;
+		}
+
+		const item: CompletionItem = this.tree.getFocus();
+
+		if (!item || !item.suggestion.documentationLabel) {
+			return;
+		}
+
+		this.setState(State.Details);
+		this.editor.focus();
+	}
+
 	public show(): void {
 		this._onDidVisibilityChange.fire(true);
 		this.tree.layout();
+		this.renderDetails();
 		this.editor.layoutContentWidget(this);
 		TPromise.timeout(100).done(() => {
 			addClass(this.element, 'visible');
@@ -839,7 +966,11 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 	}
 
 	public cancel(): void {
-		this.model.cancel();
+		if (this.state === State.Details) {
+			this.toggleDetails();
+		} else {
+			this.model.cancel();
+		}
 	}
 
 	public getPosition(): EditorBrowser.IContentWidgetPosition {
@@ -867,24 +998,32 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 	}
 
 	private updateWidgetHeight(): void {
-		const maxHeight = 1000;
 		let height = 0;
 
 		if (this.state === State.Empty || this.state === State.Loading) {
 			height = 19;
+		} else if (this.state === State.Details) {
+			height = 12 * 19;
 		} else {
 			const focus = this.tree.getFocus();
 			const focusHeight = focus ? this.renderer.getHeight(this.tree, focus) : 19;
 			height += focusHeight;
 
 			const suggestionCount = (this.tree.getContentHeight() - focusHeight) / 19;
-			const maxSuggestions = Math.floor((maxHeight - focusHeight) / 19);
-			height += Math.min(suggestionCount, 11, maxSuggestions) * 19;
+			height += Math.min(suggestionCount, 11) * 19;
 		}
 
 		this.element.style.height = height + 'px';
 		this.tree.layout(height);
 		this.editor.layoutContentWidget(this);
+	}
+
+	private renderDetails(): void {
+		if (this.state !== State.Details) {
+			this.details.render(null);
+		} else {
+			this.details.render(this.tree.getFocus());
+		}
 	}
 
 	public dispose(): void {
@@ -898,6 +1037,8 @@ export class SuggestWidget implements EditorBrowser.IContentWidget, IDisposable 
 		this.element = null;
 		this.messageElement = null;
 		this.treeElement = null;
+		this.details.dispose();
+		this.details = null;
 		this.tree.dispose();
 		this.tree = null;
 		this.renderer = null;

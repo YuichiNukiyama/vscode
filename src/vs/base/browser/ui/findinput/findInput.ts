@@ -14,6 +14,8 @@ import {IContextViewProvider} from 'vs/base/browser/ui/contextview/contextview';
 import {Widget} from 'vs/base/browser/ui/widget';
 import Event, {Emitter} from 'vs/base/common/event';
 import {StandardKeyboardEvent} from 'vs/base/browser/keyboardEvent';
+import {StandardMouseEvent} from 'vs/base/browser/mouseEvent';
+import {CommonKeybindings} from 'vs/base/common/keyCodes';
 
 export interface IFindInputOptions {
 	placeholder?:string;
@@ -24,6 +26,12 @@ export interface IFindInputOptions {
 	appendCaseSensitiveLabel?: string;
 	appendWholeWordsLabel?: string;
 	appendRegexLabel?: string;
+}
+
+export interface IMatchCountState {
+	count: string;
+	isVisible: boolean;
+	title: string;
 }
 
 const NLS_REGEX_CHECKBOX_LABEL = nls.localize('regexDescription', "Use Regular Expression");
@@ -41,9 +49,12 @@ export class FindInput extends Widget {
 	private validation:IInputValidator;
 	private label:string;
 
+	private optionsKeyListener: () => void;
+
 	private regex:Checkbox;
 	private wholeWords:Checkbox;
 	private caseSensitive:Checkbox;
+	private matchCount: MatchCount;
 	public domNode: HTMLElement;
 	public inputBox:InputBox;
 
@@ -52,6 +63,9 @@ export class FindInput extends Widget {
 
 	private _onKeyDown = this._register(new Emitter<StandardKeyboardEvent>());
 	public onKeyDown: Event<StandardKeyboardEvent> = this._onKeyDown.event;
+
+	private _onInput = this._register(new Emitter<void>());
+	public onInput: Event<void> = this._onInput.event;
 
 	private _onKeyUp = this._register(new Emitter<StandardKeyboardEvent>());
 	public onKeyUp: Event<StandardKeyboardEvent> = this._onKeyUp.event;
@@ -81,6 +95,7 @@ export class FindInput extends Widget {
 
 		this.onkeydown(this.inputBox.inputElement, (e) => this._onKeyDown.fire(e));
 		this.onkeyup(this.inputBox.inputElement, (e) => this._onKeyUp.fire(e));
+		this.oninput(this.inputBox.inputElement, (e) => this._onInput.fire());
 	}
 
 	public enable(): void {
@@ -97,6 +112,14 @@ export class FindInput extends Widget {
 		this.regex.disable();
 		this.wholeWords.disable();
 		this.caseSensitive.disable();
+	}
+
+	public setEnabled(enabled:boolean): void {
+		if (enabled) {
+			this.enable();
+		} else {
+			this.disable();
+		}
 	}
 
 	public clear(): void {
@@ -120,6 +143,11 @@ export class FindInput extends Widget {
 		if (this.inputBox.value !== value) {
 			this.inputBox.value = value;
 		}
+	}
+
+	public setMatchCountState(state:IMatchCountState): void {
+		this.matchCount.setState(state);
+		this.setInputWidth();
 	}
 
 	public select(): void {
@@ -162,7 +190,7 @@ export class FindInput extends Widget {
 	}
 
 	private setInputWidth(): void {
-		let w = this.width - this.caseSensitive.width() - this.wholeWords.width() - this.regex.width();
+		let w = this.width - this.matchCount.width() - this.caseSensitive.width() - this.wholeWords.width() - this.regex.width();
 		this.inputBox.width = w;
 	}
 
@@ -216,10 +244,47 @@ export class FindInput extends Widget {
 				this._onCaseSensitiveKeyDown.fire(e);
 			}
 		}));
+		this.matchCount = this._register(new MatchCount({
+			onClick: (e) => {
+				this.inputBox.focus();
+				e.preventDefault();
+			}
+		}));
+
+		// Arrow-Key support to navigate between options
+		let indexes = [this.caseSensitive.domNode, this.wholeWords.domNode, this.regex.domNode];
+		this.optionsKeyListener = dom.addListener(this.domNode, dom.EventType.KEY_DOWN, (e: KeyboardEvent) => {
+			let event = new StandardKeyboardEvent(e);
+			if (event.equals(CommonKeybindings.LEFT_ARROW) || event.equals(CommonKeybindings.RIGHT_ARROW) || event.equals(CommonKeybindings.ESCAPE)) {
+				let index = indexes.indexOf(<HTMLElement>document.activeElement);
+				if (index >= 0) {
+					let newIndex: number;
+					if (event.equals(CommonKeybindings.RIGHT_ARROW)) {
+						newIndex = (index + 1) % indexes.length;
+					} else if (event.equals(CommonKeybindings.LEFT_ARROW)) {
+						if (index === 0) {
+							newIndex = indexes.length - 1;
+						} else {
+							newIndex = index - 1;
+						}
+					}
+
+					if (event.equals(CommonKeybindings.ESCAPE)) {
+						indexes[index].blur();
+					} else if (newIndex >= 0) {
+						indexes[newIndex].focus();
+					}
+
+					dom.EventHelper.stop(event, true);
+				}
+			}
+		});
+
 		this.setInputWidth();
 
 		let controls = document.createElement('div');
 		controls.className = 'controls';
+		controls.appendChild(this.matchCount.domNode);
 		controls.appendChild(this.caseSensitive.domNode);
 		controls.appendChild(this.wholeWords.domNode);
 		controls.appendChild(this.regex.domNode);
@@ -241,5 +306,54 @@ export class FindInput extends Widget {
 
 	private clearValidation(): void {
 		this.inputBox.hideMessage();
+	}
+
+	public dispose(): void {
+		if (this.optionsKeyListener) {
+			this.optionsKeyListener();
+			this.optionsKeyListener = null;
+		}
+
+		super.dispose();
+	}
+}
+
+interface IMatchCountOpts {
+	onClick: (e:StandardMouseEvent) => void;
+}
+
+class MatchCount extends Widget {
+
+	public domNode: HTMLElement;
+	private isVisible: boolean;
+
+	constructor(opts:IMatchCountOpts) {
+		super();
+		this.domNode = document.createElement('div');
+		this.domNode.className = 'matchCount';
+
+		this.setState({
+			isVisible: false,
+			count: '0',
+			title: ''
+		});
+		this.onclick(this.domNode, opts.onClick);
+	}
+
+	public width(): number {
+		return this.isVisible ? 30 : 0;
+	}
+
+	public setState(state:IMatchCountState): void {
+		dom.clearNode(this.domNode);
+		this.domNode.appendChild(document.createTextNode(state.count));
+		this.domNode.title = state.title;
+
+		this.isVisible = state.isVisible;
+		if (this.isVisible) {
+			this.domNode.style.display = 'block';
+		} else {
+			this.domNode.style.display = 'none';
+		}
 	}
 }

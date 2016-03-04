@@ -12,7 +12,7 @@ declare namespace vscode {
 	/**
 	 * The version of the editor.
 	 */
-	export var version: string;
+	export const version: string;
 
 	/**
 	 * Represents a reference to a command. Provides a title which
@@ -510,6 +510,20 @@ declare namespace vscode {
 	}
 
 	/**
+	 * Represents an event describing the change of a [text editor's view column](#TextEditor.viewColumn).
+	 */
+	export interface TextEditorViewColumnChangeEvent {
+		/**
+		 * The [text editor](#TextEditor) for which the options have changed.
+		 */
+		textEditor: TextEditor;
+		/**
+		 * The new value for the [text editor's view column](#TextEditor.viewColumn).
+		 */
+		viewColumn: ViewColumn;
+	}
+
+	/**
 	 * Represents a [text editor](#TextEditor)'s [options](#TextEditor.options).
 	 */
 	export interface TextEditorOptions {
@@ -643,6 +657,11 @@ declare namespace vscode {
 		color?: string;
 
 		/**
+		 * CSS styling property that will be applied to text enclosed by a decoration.
+		 */
+		letterSpacing?: string;
+
+		/**
 		 * An **absolute path** to an image to be rendered in the gutterIconPath.
 		 */
 		gutterIconPath?: string;
@@ -719,6 +738,12 @@ declare namespace vscode {
 		 * Text editor options.
 		 */
 		options: TextEditorOptions;
+
+		/**
+		 * The column in which this editor shows. Will be `undefined` in case this
+		 * isn't one of the three main editors, e.g an embedded editor.
+		 */
+		viewColumn: ViewColumn;
 
 		/**
 		 * Perform an edit on the document associated with this text editor.
@@ -1018,20 +1043,55 @@ declare namespace vscode {
 	}
 
 	/**
+	 * A text document content provider allows to add readonly documents
+	 * to the editor, such as source from a dll or generated html from md.
+	 *
+	 * Content providers are [registered](#workbench.registerTextDocumentContentProvider)
+	 * for a [uri-scheme](#Uri.scheme). When a uri with that scheme is to
+	 * be [loaded](#workbench.openTextDocument) the content provider is
+	 * asked.
+	 */
+	export interface TextDocumentContentProvider {
+
+		/**
+		 * An event to signal a resource has changed.
+		 */
+		onDidChange?: Event<Uri>;
+
+		/**
+		 * Provide textual content for a given uri.
+		 *
+		 * The editor will use the returned string-content to create a readonly
+		 * [document](TextDocument). Resources allocated should be released when
+		 * the corresponding document has been [closed](#workbench.onDidCloseTextDocument).
+		 *
+		 * @param uri An uri which scheme matches the scheme this provider was [registered](#workspace.registerTextDocumentContentProvider) for.
+		 * @param token A cancellation token.
+		 * @return A string or a thenable that resolves to such.
+		 */
+		provideTextDocumentContent(uri: Uri, token: CancellationToken): string | Thenable<string>;
+	}
+
+	/**
 	 * Represents an item that can be selected from
 	 * a list of items.
 	 */
 	export interface QuickPickItem {
 
 		/**
-		 * A label. Will be rendered prominent.
+		 * A human readable string which is rendered prominent.
 		 */
 		label: string;
 
 		/**
-		 * A description. Will be rendered less prominent.
+		 * A human readable string which is rendered less prominent.
 		 */
 		description: string;
+
+		/**
+		 * A human readable string which is rendered less prominent.
+		 */
+		detail?: string;
 	}
 
 	/**
@@ -1044,9 +1104,19 @@ declare namespace vscode {
 		matchOnDescription?: boolean;
 
 		/**
+		 * An optional flag to include the detail when filtering the picks.
+		 */
+		matchOnDetail?: boolean;
+
+		/**
 		 * An optional string to show as place holder in the input box to guide the user what to pick on.
 		 */
 		placeHolder?: string;
+
+		/**
+		 * An optional function that is invoked whenever an item is selected.
+		 */
+		onDidSelectItem?: <T extends QuickPickItem>(item: T | string) => any;
 	}
 
 	/**
@@ -1089,6 +1159,16 @@ declare namespace vscode {
 		 * Set to true to show a password prompt that will not show the typed value.
 		 */
 		password?: boolean;
+
+		/**
+		 * An optional function that will be called to valide input and to give a hint
+		 * to the user.
+		 *
+		 * @param value The current value of the input box.
+		 * @return A human readable string which is presented as diagnostic message.
+		 * Return `undefined`, `null`, or the empty string when 'value' is valid.
+		 */
+		validateInput?: (value: string) => string;
 	}
 
 	/**
@@ -1393,7 +1473,10 @@ declare namespace vscode {
 		String,
 		Number,
 		Boolean,
-		Array
+		Array,
+		Object,
+		Key,
+		Null
 	}
 
 	/**
@@ -2360,8 +2443,7 @@ declare namespace vscode {
 
 		/**
 		 * Reveal this channel in the UI.
-		 *
-		 * @param column The column in which to show the channel, default in [one](#ViewColumn.One).
+		 * @param column @deprecated **This argument is deprecated.** The column in which to show the channel, default in [one](#ViewColumn.One).
 		 * @param preserveFocus When `true` the channel will not take focus.
 		 */
 		show(column?: ViewColumn, preserveFocus?: boolean): void;
@@ -2575,6 +2657,23 @@ declare namespace vscode {
 	}
 
 	/**
+	 * Namespace describing the environment the editor runs in.
+	 */
+	export namespace env {
+
+		/**
+		 * A unique identifier for the computer.
+		 */
+		export let machineId: string;
+
+		/**
+		 * A unique identifier for the current session.
+		 * Changes each time the editor is started.
+		 */
+		export let sessionId: string;
+	}
+
+	/**
 	 * Namespace for dealing with commands. In short, a command is a function with a
 	 * unique identifier. The function is sometimes also called _command handler_.
 	 *
@@ -2701,6 +2800,11 @@ declare namespace vscode {
 		 * An [event](#Event) which fires when the options of an editor have changed.
 		 */
 		export const onDidChangeTextEditorOptions: Event<TextEditorOptionsChangeEvent>;
+
+		/**
+		 * An [event](#Event) which fires when the view column of an editor das changed.
+		 */
+		export const onDidChangeTextEditorViewColumn: Event<TextEditorViewColumnChangeEvent>
 
 		/**
 		 * Show the given document in a text editor. A [column](#ViewColumn) can be provided
@@ -3003,6 +3107,17 @@ declare namespace vscode {
 		 * @return A promise that resolves to a [document](#TextDocument).
 		 */
 		export function openTextDocument(fileName: string): Thenable<TextDocument>;
+
+		/**
+		 * Register a text document content provider.
+		 *
+		 * Only one provider can be registered per scheme.
+		 *
+		 * @param scheme The uri-scheme to register for.
+		 * @param provider A content provider.
+		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+		 */
+		export function registerTextDocumentContentProvider(scheme: string, provider: TextDocumentContentProvider): Disposable;
 
 		/**
 		 * An event that is emitted when a [text document](#TextDocument) is opened.

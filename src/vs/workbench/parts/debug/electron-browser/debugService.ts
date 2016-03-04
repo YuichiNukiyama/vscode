@@ -22,13 +22,14 @@ import model = require('vs/workbench/parts/debug/common/debugModel');
 import debuginputs = require('vs/workbench/parts/debug/browser/debugEditorInputs');
 import viewmodel = require('vs/workbench/parts/debug/common/debugViewModel');
 import debugactions = require('vs/workbench/parts/debug/electron-browser/debugActions');
+import { Repl } from 'vs/workbench/parts/debug/browser/repl';
 import { BreakpointWidget } from 'vs/workbench/parts/debug/browser/breakpointWidget';
 import { ConfigurationManager } from 'vs/workbench/parts/debug/node/debugConfigurationManager';
-import { Repl } from 'vs/workbench/parts/debug/browser/replEditor';
 import { Source } from 'vs/workbench/parts/debug/common/debugSource';
 import { Position } from 'vs/platform/editor/common/editor';
 import { ITaskService , TaskEvent, TaskType, TaskServiceEvents} from 'vs/workbench/parts/tasks/common/taskService';
 import { IViewletService } from 'vs/workbench/services/viewlet/common/viewletService';
+import { IPanelService } from 'vs/workbench/services/panel/common/panelService';
 import { IPartService } from 'vs/workbench/services/part/common/partService';
 import { ITextFileService } from 'vs/workbench/parts/files/common/files';
 import { IWorkspaceContextService } from 'vs/workbench/services/workspace/common/contextService';
@@ -72,6 +73,7 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 		@IWorkbenchEditorService private editorService: IWorkbenchEditorService,
 		@ITextFileService private textFileService: ITextFileService,
 		@IViewletService private viewletService: IViewletService,
+		@IPanelService private panelService: IPanelService,
 		@IFileService private fileService: IFileService,
 		@IMessageService private messageService: IMessageService,
 		@IPartService private partService: IPartService,
@@ -221,11 +223,13 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 	}
 
 	private registerSessionListeners(): void {
-		this.toDispose.push(this.session.addListener2(debug.SessionEvents.INITIALIZED, (event: DebugProtocol.InitializedEvent) => {
-			this.sendAllBreakpoints().done(null, errors.onUnexpectedError);
-			this.sendExceptionBreakpoints().done(null, errors.onUnexpectedError);
-			this.session.configurationDone().done(null, errors.onUnexpectedError);
-		}));
+		this.toDispose.push(this.session.addListener2(debug.SessionEvents.INITIALIZED, (event: DebugProtocol.InitializedEvent) =>
+			this.sendAllBreakpoints().then(() => this.sendExceptionBreakpoints()).then(() => {
+				if (this.session.capablities.supportsConfigurationDoneRequest) {
+					this.session.configurationDone().done(null, errors.onUnexpectedError);
+				}
+			})
+		));
 
 		this.toDispose.push(this.session.addListener2(debug.SessionEvents.STOPPED, (event: DebugProtocol.StoppedEvent) => {
 			this.setStateAndEmit(debug.State.Stopped);
@@ -276,7 +280,9 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 		}));
 
 		this.toDispose.push(this.session.addListener2(debug.SessionEvents.OUTPUT, (event: DebugProtocol.OutputEvent) => {
-			if (event.body && typeof event.body.output === 'string' && event.body.output.length > 0) {
+			if (event.body && event.body.category === 'telemetry') {
+				this.telemetryService.publicLog(event.body.output, event.body.data);
+			} else if (event.body && typeof event.body.output === 'string' && event.body.output.length > 0) {
 				this.onOutput(event);
 			}
 		}));
@@ -299,7 +305,7 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 			this.session.threads().then((response: DebugProtocol.ThreadsResponse) => {
 				const thread = response.body.threads.filter(t => t.id === threadId).pop();
 				if (!thread) {
-					throw new Error('Did not get a thread from debug adapter with id ' + threadId);
+					throw new Error(nls.localize('debugNoThread', "Did not get a thread from debug adapter with id {0}.", threadId));
 				}
 
 				this.model.rawUpdate({
@@ -496,7 +502,7 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 				});
 			}
 			if (!this.configurationManager.getAdapter()) {
-				return Promise.wrapError(new Error(`Configured debug type '${ configuration.type }' is not supported.`));
+				return Promise.wrapError(new Error(nls.localize('debugTypeNotSupported', "Configured debug type {0} is not supported.", configuration.type)));
 			}
 
 			return this.runPreLaunchTask(configuration).then(() => this.doCreateSession(configuration, openViewlet));
@@ -563,7 +569,7 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 			}
 
 			// no task running, execute the preLaunchTask.
-			this.outputService.showOutput('Tasks', true, true);
+			this.outputService.showOutput('Tasks', true);
 
 			const taskPromise = this.taskService.run(filteredTasks[0].id).then(result => {
 				this.lastTaskEvent = null;
@@ -629,8 +635,12 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 		this.setStateAndEmit(debug.State.Inactive);
 
 		// set breakpoints back to unverified since the session ended.
+		// source reference changes across sessions, so we do not use it to persist the source.
 		const data: {[id: string]: { line: number, verified: boolean } } = { };
-		this.model.getBreakpoints().forEach(bp => data[bp.getId()] = { line: bp.lineNumber, verified: false });
+		this.model.getBreakpoints().forEach(bp => {
+			delete bp.source.raw.sourceReference;
+			data[bp.getId()] = { line: bp.lineNumber, verified: false };
+		});
 		this.model.updateBreakpoints(data);
 
 		this.inDebugMode.reset();
@@ -698,46 +708,16 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 
 	private sourceIsUnavailable(source: Source, sideBySide: boolean): Promise {
 		this.model.sourceIsUnavailable(source);
-		const editorInput = this.getDebugStringEditorInput(source, 'Source is not available.', 'text/plain');
+		const editorInput = this.getDebugStringEditorInput(source, nls.localize('debugSourceNotAvailable', "Source {0} is not available.", source.uri.fsPath), 'text/plain');
 
 		return this.editorService.openEditor(editorInput, wbeditorcommon.TextEditorOptions.create({ preserveFocus: true }), sideBySide);
 	}
 
 	public revealRepl(inBackground: boolean = false): Promise {
-		let editors = this.editorService.getVisibleEditors();
-
-		// first check if repl is already opened
-		for (let i = 0; i < editors.length; i++) {
-			let editor = editors[i];
-			if (editor.input instanceof debuginputs.ReplEditorInput) {
-				if (!inBackground) {
-					return this.editorService.focusEditor(editor);
-				}
-
-				return Promise.as(null);
-			}
-		}
-
-		// then find a position but try to not replace an existing file editor in any of the positions
-		let position = Position.LEFT;
-		let lastIndex = editors.length - 1;
-		if (editors.length === 3) {
-			position = wbeditorcommon.asFileEditorInput(editors[lastIndex].input, true) ? null : Position.RIGHT;
-		} else if (editors.length === 2) {
-			position = wbeditorcommon.asFileEditorInput(editors[lastIndex].input, true) ? Position.RIGHT : Position.CENTER;
-		} else if (editors.length) {
-			position = wbeditorcommon.asFileEditorInput(editors[lastIndex].input, true) ? Position.CENTER : Position.LEFT;
-		}
-
-		if (position === null) {
-			return Promise.as(null); // could not find a good position, return
-		}
-
-		// open repl
-		return this.editorService.openEditor(debuginputs.ReplEditorInput.getInstance(), wbeditorcommon.TextEditorOptions.create({ preserveFocus: inBackground }), position).then((editor: Repl) => {
+		return this.panelService.openPanel(debug.REPL_ID, !inBackground).then((repl: Repl) => {
 			const elements = this.model.getReplElements();
 			if (!inBackground && elements.length > 0) {
-				return editor.reveal(elements[elements.length - 1]);
+				return repl.reveal(elements[elements.length - 1]);
 			}
 		});
 	}
@@ -785,11 +765,11 @@ export class DebugService extends ee.EventEmitter implements debug.IDebugService
 
 		const breakpointsToSend = arrays.distinct(
 			this.model.getBreakpoints().filter(bp => this.model.areBreakpointsActivated() && bp.enabled && bp.source.uri.toString() === modelUri.toString()),
-			bp =>  `${ bp.desiredLineNumber }`
+			bp => `${ bp.desiredLineNumber }`
 		);
+		const rawSource = breakpointsToSend.length > 0 ? breakpointsToSend[0].source.raw : Source.toRawSource(modelUri, null);
 
-
-		return this.session.setBreakpoints({ source: Source.toRawSource(modelUri, this.model), lines: breakpointsToSend.map(bp => bp.desiredLineNumber),
+		return this.session.setBreakpoints({ source: rawSource, lines: breakpointsToSend.map(bp => bp.desiredLineNumber),
 			breakpoints: breakpointsToSend.map(bp => ({ line: bp.desiredLineNumber, condition: bp.condition })) }).then(response => {
 
 			const data: {[id: string]: { line: number, verified: boolean } } = { };

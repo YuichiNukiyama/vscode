@@ -14,7 +14,7 @@ export class Source {
 
 	private static INTERNAL_URI_PREFIX = 'debug://internal/';
 
-	constructor(private raw: DebugProtocol.Source) {
+	constructor(public raw: DebugProtocol.Source) {
 		this.uri = raw.path ? uri.file(raw.path) : uri.parse(Source.INTERNAL_URI_PREFIX + raw.name);
 		this.available = true;
 	}
@@ -36,13 +36,15 @@ export class Source {
 	}
 
 	public static toRawSource(uri: uri, model: IModel): DebugProtocol.Source {
-		// first try to find the raw source amongst the stack frames - since that represenation has more data (source reference),
-		const threads = model.getThreads();
-		for (let threadId in threads) {
-			if (threads.hasOwnProperty(threadId) && threads[threadId].callStack) {
-				const found = threads[threadId].callStack.filter(sf => sf.source.uri.toString() === uri.toString()).pop();
-				if (found) {
-					return found.source.raw;
+		if (model) {
+			// first try to find the raw source amongst the stack frames - since that represenation has more data (source reference),
+			const threads = model.getThreads();
+			for (let threadId in threads) {
+				if (threads.hasOwnProperty(threadId) && threads[threadId].callStack) {
+					const found = threads[threadId].callStack.filter(sf => sf.source.uri.toString() === uri.toString()).pop();
+					if (found) {
+						return found.source.raw;
+					}
 				}
 			}
 		}

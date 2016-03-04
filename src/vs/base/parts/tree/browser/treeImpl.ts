@@ -8,9 +8,9 @@ import 'vs/css!./tree';
 import WinJS = require('vs/base/common/winjs.base');
 import TreeDefaults = require('vs/base/parts/tree/browser/treeDefaults');
 import Events = require('vs/base/common/eventEmitter');
-import Model = require('vs/base/parts/tree/common/treeModel');
+import Model = require('vs/base/parts/tree/browser/treeModel');
 import View = require('./treeView');
-import _ = require('vs/base/parts/tree/common/tree');
+import _ = require('vs/base/parts/tree/browser/tree');
 import { INavigator, MappedNavigator } from 'vs/base/common/iterator';
 
 export class TreeContext implements _.ITreeContext {
@@ -305,10 +305,6 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 
 	public hasTrait(trait: string, element: any): boolean {
 		return this.model.hasTrait(trait, element);
-	}
-
-	public withFakeRow(fn:(container:HTMLElement)=>any):any {
-		return this.view.withFakeRow(fn);
 	}
 
 	getNavigator(): INavigator<any> {

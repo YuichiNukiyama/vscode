@@ -18,7 +18,7 @@ import Builder = require('vs/base/browser/builder');
 import Keyboard = require('vs/base/browser/keyboardEvent');
 import Actions = require('vs/base/common/actions');
 import ActionBar = require('vs/base/browser/ui/actionbar/actionbar');
-import Tree = require('vs/base/parts/tree/common/tree');
+import Tree = require('vs/base/parts/tree/browser/tree');
 import TreeImpl = require('vs/base/parts/tree/browser/treeImpl');
 import WorkbenchEvents = require('vs/workbench/common/events');
 import git = require('vs/workbench/parts/git/common/git');
@@ -200,7 +200,7 @@ export class ChangesView extends EventEmitter.EventEmitter implements GitView.IV
 		this.currentDimension = dimension;
 
 		this.commitInputBox.layout();
-		var statusViewHeight = dimension.height - (this.commitInputBox.height + 10 /* margin */);
+		var statusViewHeight = dimension.height - (this.commitInputBox.height + 12 /* margin */);
 		this.$statusView.size(dimension.width, statusViewHeight);
 		this.tree.layout(statusViewHeight);
 
@@ -409,12 +409,12 @@ export class ChangesView extends EventEmitter.EventEmitter implements GitView.IV
 			const resource = fileInput.getResource();
 
 			const workspaceRoot = this.contextService.getWorkspace().resource.fsPath;
-			if (!paths.isEqualOrParent(resource.fsPath, workspaceRoot)) {
+			if (!workspaceRoot || !paths.isEqualOrParent(resource.fsPath, workspaceRoot)) {
 				return null; // out of workspace not yet supported
 			}
 
 			const repositoryRoot = this.gitService.getModel().getRepositoryRoot();
-			if (!paths.isEqualOrParent(resource.fsPath, repositoryRoot)) {
+			if (!repositoryRoot || !paths.isEqualOrParent(resource.fsPath, repositoryRoot)) {
 				return null; // out of repository not supported
 			}
 

@@ -21,7 +21,7 @@ import {Sash, ISashEvent, IVerticalSashLayoutProvider} from 'vs/base/browser/ui/
 import {ProgressBar} from 'vs/base/browser/ui/progressbar/progressbar';
 import {BaseEditor} from 'vs/workbench/browser/parts/editor/baseEditor';
 import {EditorInput, IInputStatus, TextEditorOptions} from 'vs/workbench/common/editor';
-import {DiffEditorInput} from 'vs/workbench/browser/parts/editor/diffEditorInput';
+import {DiffEditorInput} from 'vs/workbench/common/editor/diffEditorInput';
 import {EventType as BaseEventType} from 'vs/base/common/events';
 import {EditorInputEvent, EventType as WorkbenchEventType} from 'vs/workbench/common/events';
 import DOM = require('vs/base/browser/dom');
@@ -1034,7 +1034,8 @@ export class SideBySideEditorControl extends EventEmitter implements IVerticalSa
 			// Toolbar
 			this.editorActionsToolbar[position] = new ToolBar(div.getHTMLElement(), this.contextMenuService, {
 				actionItemProvider: (action: Action) => this.actionItemProvider(action, position),
-				orientation: ActionsOrientation.HORIZONTAL
+				orientation: ActionsOrientation.HORIZONTAL,
+				ariaLabel: nls.localize('araLabelEditorActions', "Editor actions")
 			});
 
 			// Action Run Handling

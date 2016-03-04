@@ -1067,16 +1067,20 @@ export function emmet(description: string):HTMLElement {
 	}
 
 	var result = document.createElement(match[1] || 'div');
-	match[3] && (result.id = match[3]);
-	match[4] && (result.className = match[4].replace(/\./g, ' ').trim());
+	if (match[3]) result.id = match[3];
+	if (match[4]) result.className = match[4].replace(/\./g, ' ').trim();
 
 	return result;
 };
 
-export function show(element: HTMLElement): void {
-	element.style.display = null;
+export function show(...elements: HTMLElement[]): void {
+	for (const element of elements) {
+		element.style.display = null;
+	}
 }
 
-export function hide(element: HTMLElement): void {
-	element.style.display = 'none';
+export function hide(...elements: HTMLElement[]): void {
+	for (const element of elements) {
+		element.style.display = 'none';
+	}
 }

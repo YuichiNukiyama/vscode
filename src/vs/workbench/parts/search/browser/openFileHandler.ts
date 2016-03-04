@@ -17,7 +17,8 @@ import {QuickOpenHandler, EditorQuickOpenEntry} from 'vs/workbench/browser/quick
 import {QueryBuilder} from 'vs/workbench/parts/search/common/searchQuery';
 import {ITextFileService} from 'vs/workbench/parts/files/common/files';
 import {EditorInput} from 'vs/workbench/common/editor';
-import {IWorkbenchEditorService, IFileInput} from 'vs/workbench/services/editor/common/editorService';
+import {IResourceInput} from 'vs/platform/editor/common/editor';
+import {IWorkbenchEditorService} from 'vs/workbench/services/editor/common/editorService';
 import {IConfigurationService} from 'vs/platform/configuration/common/configuration';
 import {IInstantiationService} from 'vs/platform/instantiation/common/instantiation';
 import {IMessageService} from 'vs/platform/message/common/message';
@@ -65,8 +66,8 @@ export class FileEntry extends EditorQuickOpenEntry {
 		this.range = range;
 	}
 
-	public getInput(): IFileInput | EditorInput {
-		let input: IFileInput = {
+	public getInput(): IResourceInput | EditorInput {
+		let input: IResourceInput = {
 			resource: this.resource,
 		};
 
@@ -81,13 +82,7 @@ export class FileEntry extends EditorQuickOpenEntry {
 }
 
 export class OpenFileHandler extends QuickOpenHandler {
-
-	private static SEARCH_DELAY = 500; // This delay accommodates for the user typing a word and then stops typing to start searching
-
 	private queryBuilder: QueryBuilder;
-	private delayer: ThrottledDelayer<QuickOpenEntry[]>;
-	private isStandalone: boolean;
-	private fuzzyMatchingEnabled: boolean;
 
 	constructor(
 		@IWorkbenchEditorService private editorService: IWorkbenchEditorService,
@@ -101,17 +96,6 @@ export class OpenFileHandler extends QuickOpenHandler {
 		super();
 
 		this.queryBuilder = this.instantiationService.createInstance(QueryBuilder);
-		this.delayer = new ThrottledDelayer<QuickOpenEntry[]>(OpenFileHandler.SEARCH_DELAY);
-		this.isStandalone = true;
-	}
-
-	public setStandalone(standalone: boolean) {
-		this.delayer = standalone ? new ThrottledDelayer<QuickOpenEntry[]>(OpenFileHandler.SEARCH_DELAY) : null;
-		this.isStandalone = standalone;
-	}
-
-	public setFuzzyMatchingEnabled(enabled: boolean): void {
-		this.fuzzyMatchingEnabled = enabled;
 	}
 
 	public getResults(searchValue: string): TPromise<QuickOpenModel> {
@@ -121,8 +105,6 @@ export class OpenFileHandler extends QuickOpenHandler {
 		// Respond directly to empty search
 		if (!searchValue) {
 			promise = TPromise.as([]);
-		} else if (this.delayer) {
-			promise = this.delayer.trigger(() => this.doFindResults(searchValue)); // Run search with delay as needed
 		} else {
 			promise = this.doFindResults(searchValue);
 		}
@@ -131,16 +113,13 @@ export class OpenFileHandler extends QuickOpenHandler {
 	}
 
 	private doFindResults(searchValue: string): TPromise<QuickOpenEntry[]> {
-		let query: IQueryOptions = {
+		const query: IQueryOptions = {
 			folderResources: this.contextService.getWorkspace() ? [this.contextService.getWorkspace().resource] : [],
 			extraFileResources: this.textFileService.getWorkingFilesModel().getOutOfWorkspaceContextEntries().map(e => e.resource),
-			filePattern: searchValue,
-			matchFuzzy: this.fuzzyMatchingEnabled
+			filePattern: searchValue
 		};
 
 		return this.queryBuilder.file(query).then((query) => this.searchService.search(query)).then((complete) => {
-
-			// Highlight
 			let results: QuickOpenEntry[] = [];
 			for (let i = 0; i < complete.results.length; i++) {
 				let fileMatch = complete.results[i];
@@ -148,18 +127,7 @@ export class OpenFileHandler extends QuickOpenHandler {
 				let label = paths.basename(fileMatch.resource.fsPath);
 				let description = labels.getPathLabel(paths.dirname(fileMatch.resource.fsPath), this.contextService);
 
-				let entry = this.instantiationService.createInstance(FileEntry, label, description, fileMatch.resource);
-
-				// Apply highlights
-				let {labelHighlights, descriptionHighlights} = QuickOpenEntry.highlight(entry, searchValue, this.fuzzyMatchingEnabled);
-				entry.setHighlights(labelHighlights, descriptionHighlights);
-
-				results.push(entry);
-			}
-
-			// Sort (standalone only)
-			if (this.isStandalone) {
-				results = results.sort((elementA, elementB) => QuickOpenEntry.compare(elementA, elementB, searchValue));
+				results.push(this.instantiationService.createInstance(FileEntry, label, description, fileMatch.resource));
 			}
 
 			return results;

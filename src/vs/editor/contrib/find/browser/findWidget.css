@@ -28,10 +28,6 @@
 	background-color: black;
 }
 
-.monaco-checkbox .checkbox:focus + .label {
-	outline: auto 5px rgb(229, 151, 0);
-}
-
 /* Find widget */
 .monaco-editor .find-widget {
 	position: absolute;
@@ -114,6 +110,19 @@
 .monaco-editor .find-widget.no-results .monaco-findInput .monaco-inputbox {
 	border-color: #E51400;
 }
+.monaco-editor .find-widget.no-results .matchesCount {
+	background-color: rgba(255,0,0,0.5);
+}
+
+.monaco-editor .find-widget .matchesCount {
+	display: inline-block;
+	margin: 0 1px 0 3px;
+	padding: 0 2px 0 2px;
+	position: relative;
+	min-width: 77px;
+	top: 2px;
+	text-align: center;
+}
 
 .monaco-editor .find-widget .button {
 	width: 20px;
@@ -142,7 +151,6 @@
 }
 
 .monaco-editor .find-widget .button.toggle {
-	display: none;
 	position: absolute;
 	top: 0;
 	left: 0;
@@ -155,8 +163,8 @@
 	box-sizing:			border-box;
 }
 
-.monaco-editor .find-widget.can-replace .button.toggle {
-	display: inherit;
+.monaco-editor .find-widget .button.toggle.disabled {
+	display: none;
 }
 
 .monaco-editor .find-widget .previous {

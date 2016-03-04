@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import nls = require('vs/nls');
 import 'vs/css!../browser/media/breakpointWidget';
 import async = require('vs/base/common/async');
 import errors = require('vs/base/common/errors');
@@ -12,6 +13,7 @@ import lifecycle = require('vs/base/common/lifecycle');
 import dom = require('vs/base/browser/dom');
 import { InputBox } from 'vs/base/browser/ui/inputbox/inputBox';
 import { CommonEditorRegistry } from 'vs/editor/common/editorCommonExtensions';
+import editorcommon = require('vs/editor/common/editorCommon');
 import editorbrowser = require('vs/editor/browser/editorBrowser');
 import { ZoneWidget } from 'vs/editor/contrib/zoneWidget/browser/zoneWidget';
 import { IContextViewService } from 'vs/platform/contextview/browser/contextView';
@@ -42,6 +44,7 @@ export class BreakpointWidget extends ZoneWidget {
 		this.breakpointWidgetVisible = keybindingService.createKey(CONTEXT_BREAKPOINT_WIDGET_VISIBLE, false);
 		this.breakpointWidgetVisible.set(true);
 		BreakpointWidget.INSTANCE = this;
+		this.toDispose.push(editor.addListener2(editorcommon.EventType.ModelChanged, () => this.dispose()));
 	}
 
 	public fillContainer(container: HTMLElement): void {
@@ -51,7 +54,7 @@ export class BreakpointWidget extends ZoneWidget {
 
 		const inputBoxContainer = dom.append(container, $('.inputBoxContainer'));
 		this.inputBox = new InputBox(inputBoxContainer, this.contextViewService, {
-			placeholder: `Breakpoint on line ${ this.lineNumber } will only stop if this condition is true. 'Enter' to accept, 'esc' to cancel.`
+			placeholder: nls.localize('breakpointWidgetPlaceholder', "Breakpoint on line {0} will only stop if this condition is true. 'Enter' to accept, 'esc' to cancel.", this.lineNumber)
 		});
 		this.toDispose.push(this.inputBox);
 

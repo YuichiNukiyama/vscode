@@ -7,7 +7,7 @@
 import nls = require('vs/nls');
 import {TPromise} from 'vs/base/common/winjs.base';
 import {Builder, $} from 'vs/base/browser/builder';
-import tree = require('vs/base/parts/tree/common/tree');
+import tree = require('vs/base/parts/tree/browser/tree');
 import {Tree} from 'vs/base/parts/tree/browser/treeImpl';
 import {IAction, IActionRunner} from 'vs/base/common/actions';
 import workbenchEditorCommon = require('vs/workbench/common/editor');
@@ -19,7 +19,7 @@ import errors = require('vs/base/common/errors');
 import {EventType as WorkbenchEventType, UntitledEditorEvent, EditorEvent} from 'vs/workbench/common/events';
 import {AdaptiveCollapsibleViewletView} from 'vs/workbench/browser/viewlet';
 import {CloseWorkingFileAction, SaveAllAction} from 'vs/workbench/parts/files/browser/fileActions';
-import {WorkingFileEntry} from 'vs/workbench/parts/files/browser/workingFilesModel';
+import {WorkingFileEntry} from 'vs/workbench/parts/files/common/workingFilesModel';
 import {WorkingFilesDragAndDrop, WorkingFilesSorter, WorkingFilesController, WorkingFilesDataSource, WorkingFilesRenderer, WorkingFilesActionProvider} from 'vs/workbench/parts/files/browser/views/workingFilesViewer';
 import {IWorkbenchEditorService} from 'vs/workbench/services/editor/common/editorService';
 import {IConfigurationService, IConfigurationServiceEvent, ConfigurationServiceEventTypes} from 'vs/platform/configuration/common/configuration';
@@ -55,7 +55,7 @@ export class WorkingFilesView extends AdaptiveCollapsibleViewletView {
 		@IWorkbenchEditorService private editorService: IWorkbenchEditorService,
 		@IConfigurationService private configurationService: IConfigurationService
 	) {
-		super(actionRunner, WorkingFilesView.computeExpandedBodySize(textFileService.getWorkingFilesModel()), !!settings[WorkingFilesView.MEMENTO_COLLAPSED], 'workingFilesView', messageService, contextMenuService);
+		super(actionRunner, WorkingFilesView.computeExpandedBodySize(textFileService.getWorkingFilesModel()), !!settings[WorkingFilesView.MEMENTO_COLLAPSED], nls.localize('workingFilesSection', "Working Files Section"), messageService, contextMenuService);
 
 		this.settings = settings;
 		this.model = this.textFileService.getWorkingFilesModel();

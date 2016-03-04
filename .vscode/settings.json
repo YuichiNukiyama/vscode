@@ -13,5 +13,5 @@
 		"out*/**": true,
 		"extensions/**/out/**": true
 	},
-	"filePicker.alternateFileNameMatching": true
+	"tslint.rulesDirectory": "node_modules/tslint-microsoft-contrib"
 }

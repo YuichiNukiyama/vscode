@@ -34,7 +34,8 @@ export interface IProductConfiguration {
 	win32MutexName: string;
 	dataFolderName: string;
 	downloadUrl: string;
-	updateUrl: string;
+	updateUrl?: string;
+	quality?: string;
 	commit: string;
 	date: string;
 	expiryDate: number;
@@ -79,7 +80,8 @@ product.nameShort = product.nameShort || 'Code [OSS Build]';
 product.nameLong = product.nameLong || 'Code [OSS Build]';
 product.dataFolderName = product.dataFolderName || (isBuilt ? '.code-oss-build' : '.code-oss-build-dev');
 
-export const updateInfo: IUpdateInfo = product.updateUrl ? { baseUrl: product.updateUrl } : void 0;
+export const updateUrl = product.updateUrl;
+export const quality = product.quality;
 
 export const mainIPCHandle = getMainIPCHandle();
 export const sharedIPCHandle = getSharedIPCHandle();
@@ -143,6 +145,8 @@ export interface ICommandLineArguments {
 	openInSameWindow?: boolean;
 
 	gotoLineMode?: boolean;
+
+	locale?: string;
 }
 
 function parseCli(): ICommandLineArguments {
@@ -203,7 +207,8 @@ function parseCli(): ICommandLineArguments {
 		pluginHomePath: normalizePath(parseString(args, '--extensionHomePath')),
 		pluginDevelopmentPath: normalizePath(parseString(args, '--extensionDevelopmentPath')),
 		pluginTestsPath: normalizePath(parseString(args, '--extensionTestsPath')),
-		disablePlugins: !!opts['disableExtensions'] || !!opts['disable-extensions']
+		disablePlugins: !!opts['disableExtensions'] || !!opts['disable-extensions'],
+		locale: parseString(args, '--locale')
 	};
 }
 

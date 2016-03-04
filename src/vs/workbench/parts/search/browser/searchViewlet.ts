@@ -25,7 +25,7 @@ import {FileLabel} from 'vs/base/browser/ui/filelabel/fileLabel';
 import {FindInput} from 'vs/base/browser/ui/findinput/findInput';
 import {LeftRightWidget, IRenderer} from 'vs/base/browser/ui/leftRightWidget/leftRightWidget';
 import {CountBadge} from 'vs/base/browser/ui/countBadge/countBadge';
-import {ITree, IElementCallback, IFilter, ISorter, IDataSource} from 'vs/base/parts/tree/common/tree';
+import {ITree, IElementCallback, IFilter, ISorter, IDataSource} from 'vs/base/parts/tree/browser/tree';
 import {Tree} from 'vs/base/parts/tree/browser/treeImpl';
 import {ClickBehavior, DefaultController} from 'vs/base/parts/tree/browser/treeDefaults';
 import {ActionsRenderer} from 'vs/base/parts/tree/browser/actionsRenderer';
@@ -743,7 +743,7 @@ export class SearchViewlet extends Viewlet {
 			};
 			this.findInput = new FindInput(div.getHTMLElement(), this.contextViewService, options);
 			this.findInput.onKeyUp(onStandardKeyUp);
-			this.findInput.onKeyDown((keyboardEvent:StandardKeyboardEvent) => {
+			this.findInput.onKeyDown((keyboardEvent: StandardKeyboardEvent) => {
 				if (keyboardEvent.keyCode === KeyCode.DownArrow) {
 					dom.EventHelper.stop(keyboardEvent);
 					if (this.showsFileTypes()) {
@@ -763,10 +763,18 @@ export class SearchViewlet extends Viewlet {
 		}).style({ position: 'relative' }).getHTMLElement();
 
 		this.queryDetails = builder.div({ 'class': ['query-details', 'separator'] }, (builder) => {
-			builder.div({ 'class': 'more', text: '\u2026'/*, href: '#'*/ }).on(dom.EventType.CLICK, (e) => {
-				dom.EventHelper.stop(e);
-				this.toggleFileTypes();
-			});
+			builder.div({ 'class': 'more', 'tabindex': 0, 'role': 'button', 'title': nls.localize('moreSearch', "Toggle Search Details") })
+				.on(dom.EventType.CLICK, (e) => {
+					dom.EventHelper.stop(e);
+					this.toggleFileTypes();
+				}).on(dom.EventType.KEY_UP, (e: KeyboardEvent) => {
+					let event = new StandardKeyboardEvent(e);
+
+					if (event.equals(CommonKeybindings.ENTER) || event.equals(CommonKeybindings.SPACE)) {
+						dom.EventHelper.stop(e);
+						this.toggleFileTypes();
+					}
+				});
 
 			//folder includes list
 			builder.div({ 'class': 'file-types' }, (builder) => {
@@ -836,6 +844,7 @@ export class SearchViewlet extends Viewlet {
 					actions: [this.instantiationService.createInstance(ConfigureGlobalExclusionsAction)]
 				});
 				this.inputPatternGlobalExclusions.inputElement.readOnly = true;
+				$(this.inputPatternGlobalExclusions.inputElement).attr('aria-readonly', 'true');
 				$(this.inputPatternGlobalExclusions.inputElement).addClass('disabled');
 			}).hide();
 		}).getHTMLElement();
@@ -979,7 +988,7 @@ export class SearchViewlet extends Viewlet {
 
 	public layout(dimension: Dimension): void {
 		this.size = dimension;
-		Promise.timeout(10).done(() => { this.reLayout(); }, errors.onUnexpectedError);
+		this.reLayout();
 	}
 
 	public getControl(): ITree {
@@ -1041,7 +1050,10 @@ export class SearchViewlet extends Viewlet {
 			this.inputPatternIncludes.select();
 		} else {
 			dom.removeClass(this.queryDetails, cls);
+			this.findInput.focus();
+			this.findInput.select();
 		}
+
 		if (!skipLayout && this.size) {
 			this.layout(this.size);
 		}
@@ -1151,7 +1163,7 @@ export class SearchViewlet extends Viewlet {
 		this.disposeModel();
 		this.showEmptyStage();
 
-		let handledMatches: {[id: string]: boolean} = Object.create(null);
+		let handledMatches: { [id: string]: boolean } = Object.create(null);
 		let autoExpand = (alwaysExpandIfOneResult: boolean) => {
 			// Auto-expand / collapse based on number of matches:
 			// - alwaysExpandIfOneResult: expand file results if we have just one file result and less than 50 matches on a file
