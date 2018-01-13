@@ -5,155 +5,208 @@
 'use strict';
 
 import nls = require('vs/nls');
-import {TPromise, Promise} from 'vs/base/common/winjs.base';
+import { TPromise } from 'vs/base/common/winjs.base';
+import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import paths = require('vs/base/common/paths');
-import platform = require('vs/base/common/platform');
-import encoding = require('vs/base/common/bits/encoding');
+import encoding = require('vs/base/node/encoding');
 import errors = require('vs/base/common/errors');
-import strings = require('vs/base/common/strings');
 import uri from 'vs/base/common/uri';
-import timer = require('vs/base/common/timer');
-import files = require('vs/platform/files/common/files');
-import {FileService as NodeFileService, IFileServiceOptions, IEncodingOverride} from 'vs/workbench/services/files/node/fileService';
-import {IConfigurationService, IConfigurationServiceEvent, ConfigurationServiceEventTypes} from 'vs/platform/configuration/common/configuration';
-import {IEventService} from 'vs/platform/event/common/event';
-import {IWorkspaceContextService} from 'vs/platform/workspace/common/workspace';
+import { FileOperation, FileOperationEvent, IFileService, IFilesConfiguration, IResolveFileOptions, IFileStat, IResolveFileResult, IContent, IStreamContent, IImportResult, IResolveContentOptions, IUpdateContentOptions, FileChangesEvent, ICreateFileOptions } from 'vs/platform/files/common/files';
+import { FileService as NodeFileService, IFileServiceOptions, IEncodingOverride } from 'vs/workbench/services/files/node/fileService';
+import { IConfigurationService, IConfigurationChangeEvent } from 'vs/platform/configuration/common/configuration';
+import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
+import { Action } from 'vs/base/common/actions';
+import { IMessageService, IMessageWithAction, Severity, CloseAction } from 'vs/platform/message/common/message';
+import { IEnvironmentService } from 'vs/platform/environment/common/environment';
+import { ILifecycleService } from 'vs/platform/lifecycle/common/lifecycle';
+import { IStorageService, StorageScope } from 'vs/platform/storage/common/storage';
+import Event, { Emitter } from 'vs/base/common/event';
 
-import {shell} from 'electron';
+import { shell } from 'electron';
+import { ITextResourceConfigurationService } from 'vs/editor/common/services/resourceConfiguration';
+import { isMacintosh } from 'vs/base/common/platform';
+import product from 'vs/platform/node/product';
 
-export class FileService implements files.IFileService {
-	public serviceId = files.IFileService;
+export class FileService implements IFileService {
 
-	private raw: TPromise<files.IFileService>;
+	public _serviceBrand: any;
 
-	private configurationChangeListenerUnbind: () => void;
+	// If we run with .NET framework < 4.5, we need to detect this error to inform the user
+	private static readonly NET_VERSION_ERROR = 'System.MissingMethodException';
+	private static readonly NET_VERSION_ERROR_IGNORE_KEY = 'ignoreNetVersionError';
+
+	private raw: NodeFileService;
+
+	private toUnbind: IDisposable[];
+
+	protected _onFileChanges: Emitter<FileChangesEvent>;
+	protected _onAfterOperation: Emitter<FileOperationEvent>;
 
 	constructor(
-		private configurationService: IConfigurationService,
-		private eventService: IEventService,
-		private contextService: IWorkspaceContextService
+		@IConfigurationService private configurationService: IConfigurationService,
+		@IWorkspaceContextService private contextService: IWorkspaceContextService,
+		@IEnvironmentService private environmentService: IEnvironmentService,
+		@ILifecycleService private lifecycleService: ILifecycleService,
+		@IMessageService private messageService: IMessageService,
+		@IStorageService private storageService: IStorageService,
+		@ITextResourceConfigurationService textResourceConfigurationService: ITextResourceConfigurationService
 	) {
+		this.toUnbind = [];
 
-		// Init raw implementation
-		this.raw = this.configurationService.loadConfiguration().then((configuration: files.IFilesConfiguration) => {
+		this._onFileChanges = new Emitter<FileChangesEvent>();
+		this.toUnbind.push(this._onFileChanges);
 
-			// adjust encodings (TODO@Ben knowledge on settings location ('.vscode') is hardcoded)
-			let encodingOverride: IEncodingOverride[] = [];
-			encodingOverride.push({ resource: uri.file(this.contextService.getConfiguration().env.appSettingsHome), encoding: encoding.UTF8 });
-			if (this.contextService.getWorkspace()) {
-				encodingOverride.push({ resource: uri.file(paths.join(this.contextService.getWorkspace().resource.fsPath, '.vscode')), encoding: encoding.UTF8 });
+		this._onAfterOperation = new Emitter<FileOperationEvent>();
+		this.toUnbind.push(this._onAfterOperation);
+
+		const configuration = this.configurationService.getValue<IFilesConfiguration>();
+
+		let watcherIgnoredPatterns: string[] = [];
+		if (configuration.files && configuration.files.watcherExclude) {
+			watcherIgnoredPatterns = Object.keys(configuration.files.watcherExclude).filter(k => !!configuration.files.watcherExclude[k]);
+		}
+
+		// build config
+		const fileServiceConfig: IFileServiceOptions = {
+			errorLogger: (msg: string) => this.onFileServiceError(msg),
+			encodingOverride: this.getEncodingOverrides(),
+			watcherIgnoredPatterns,
+			verboseLogging: environmentService.verbose,
+			useExperimentalFileWatcher: configuration.files.useExperimentalFileWatcher,
+			elevationSupport: {
+				cliPath: this.environmentService.cliPath,
+				promptTitle: this.environmentService.appNameLong,
+				promptIcnsPath: (isMacintosh && this.environmentService.isBuilt) ? paths.join(paths.dirname(this.environmentService.appRoot), `${product.nameShort}.icns`) : void 0
 			}
+		};
 
-			let doNotWatch = ['**/.git/objects/**']; 	// this folder does the heavy duty for git and we don't need to watch it
-			if (platform.isLinux) {
-				doNotWatch.push('**/node_modules/**'); 	// Linux does not have a good watching implementation, so we exclude more
-			}
-
-			// build config
-			let fileServiceConfig: IFileServiceOptions = {
-				errorLogger: (msg: string) => errors.onUnexpectedError(msg),
-				encoding: configuration.files && configuration.files.encoding,
-				encodingOverride: encodingOverride,
-				watcherIgnoredPatterns: doNotWatch,
-				verboseLogging: this.contextService.getConfiguration().env.verboseLogging
-			};
-
-			// create service
-			let workspace = this.contextService.getWorkspace();
-			return new NodeFileService(workspace ? workspace.resource.fsPath : void 0, this.eventService, fileServiceConfig);
-		});
+		// create service
+		this.raw = new NodeFileService(contextService, textResourceConfigurationService, configurationService, lifecycleService, fileServiceConfig);
 
 		// Listeners
-		this.raw.done((raw) => {
-			this.registerListeners();
-		}, errors.onUnexpectedError);
+		this.registerListeners();
+	}
+
+	public get onFileChanges(): Event<FileChangesEvent> {
+		return this._onFileChanges.event;
+	}
+
+	public get onAfterOperation(): Event<FileOperationEvent> {
+		return this._onAfterOperation.event;
+	}
+
+	private onFileServiceError(msg: string): void {
+
+		// Forward to unexpected error handler
+		errors.onUnexpectedError(msg);
+
+		// Detect if we run < .NET Framework 4.5
+		if (typeof msg === 'string' && msg.indexOf(FileService.NET_VERSION_ERROR) >= 0 && !this.storageService.getBoolean(FileService.NET_VERSION_ERROR_IGNORE_KEY, StorageScope.WORKSPACE)) {
+			this.messageService.show(Severity.Warning, <IMessageWithAction>{
+				message: nls.localize('netVersionError', "The Microsoft .NET Framework 4.5 is required. Please follow the link to install it."),
+				actions: [
+					new Action('install.net', nls.localize('installNet', "Download .NET Framework 4.5"), null, true, () => {
+						window.open('https://go.microsoft.com/fwlink/?LinkId=786533');
+
+						return TPromise.as(true);
+					}),
+					new Action('net.error.ignore', nls.localize('neverShowAgain', "Don't Show Again"), '', true, () => {
+						this.storageService.store(FileService.NET_VERSION_ERROR_IGNORE_KEY, true, StorageScope.WORKSPACE);
+
+						return TPromise.as(null);
+					}),
+					CloseAction
+				]
+			});
+		}
 	}
 
 	private registerListeners(): void {
 
-		// Config Changes
-		this.configurationChangeListenerUnbind = this.configurationService.addListener(ConfigurationServiceEventTypes.UPDATED, (e: IConfigurationServiceEvent) => this.onConfigurationChange(e.config));
+		// File events
+		this.toUnbind.push(this.raw.onFileChanges(e => this._onFileChanges.fire(e)));
+		this.toUnbind.push(this.raw.onAfterOperation(e => this._onAfterOperation.fire(e)));
+
+		// Config changes
+		this.toUnbind.push(this.configurationService.onDidChangeConfiguration(e => this.onConfigurationChange(e)));
+
+		// Root changes
+		this.toUnbind.push(this.contextService.onDidChangeWorkspaceFolders(() => this.onDidChangeWorkspaceFolders()));
+
+		// Lifecycle
+		this.lifecycleService.onShutdown(this.dispose, this);
 	}
 
-	private onConfigurationChange(configuration: files.IFilesConfiguration): void {
-		this.updateOptions(configuration.files);
+	private onDidChangeWorkspaceFolders(): void {
+		this.updateOptions({ encodingOverride: this.getEncodingOverrides() });
 	}
 
-	public updateOptions(options: any): void {
-		this.raw.done((raw) => {
-			raw.updateOptions(options);
-		}, errors.onUnexpectedError);
-	}
-
-	public resolveFile(resource: uri, options?: files.IResolveFileOptions): TPromise<files.IFileStat> {
-		return this.raw.then((raw) => {
-			return raw.resolveFile(resource, options);
+	private getEncodingOverrides(): IEncodingOverride[] {
+		const encodingOverride: IEncodingOverride[] = [];
+		encodingOverride.push({ resource: uri.file(this.environmentService.appSettingsHome), encoding: encoding.UTF8 });
+		this.contextService.getWorkspace().folders.forEach(folder => {
+			encodingOverride.push({ resource: uri.file(paths.join(folder.uri.fsPath, '.vscode')), encoding: encoding.UTF8 });
 		});
+
+		return encodingOverride;
 	}
 
-	public resolveContent(resource: uri, options?: files.IResolveContentOptions): TPromise<files.IContent> {
-		let contentId = resource.toString();
-		let timerEvent = timer.start(timer.Topic.WORKBENCH, strings.format('Load {0}', contentId));
-
-		return this.raw.then((raw) => {
-			return raw.resolveContent(resource, options).then((result) => {
-				timerEvent.stop();
-
-				return result;
-			});
-		});
+	private onConfigurationChange(event: IConfigurationChangeEvent): void {
+		if (event.affectsConfiguration('files.useExperimentalFileWatcher')) {
+			this.updateOptions({ useExperimentalFileWatcher: this.configurationService.getValue<boolean>('files.useExperimentalFileWatcher') });
+		}
 	}
 
-	public resolveContents(resources: uri[]): TPromise<files.IContent[]> {
-		return this.raw.then((raw) => {
-			return raw.resolveContents(resources);
-		});
+	public updateOptions(options: object): void {
+		this.raw.updateOptions(options);
 	}
 
-	public updateContent(resource: uri, value: string, options?: files.IUpdateContentOptions): TPromise<files.IFileStat> {
-		let timerEvent = timer.start(timer.Topic.WORKBENCH, strings.format('Save {0}', resource.toString()));
-
-		return this.raw.then((raw) => {
-			return raw.updateContent(resource, value, options).then((result) => {
-				timerEvent.stop();
-
-				return result;
-			}, (error) => {
-				timerEvent.stop();
-
-				return Promise.wrapError(error);
-			});
-		});
+	public resolveFile(resource: uri, options?: IResolveFileOptions): TPromise<IFileStat> {
+		return this.raw.resolveFile(resource, options);
 	}
 
-	public moveFile(source: uri, target: uri, overwrite?: boolean): TPromise<files.IFileStat> {
-		return this.raw.then((raw) => {
-			return raw.moveFile(source, target, overwrite);
-		});
+	public resolveFiles(toResolve: { resource: uri, options?: IResolveFileOptions }[]): TPromise<IResolveFileResult[]> {
+		return this.raw.resolveFiles(toResolve);
 	}
 
-	public copyFile(source: uri, target: uri, overwrite?: boolean): TPromise<files.IFileStat> {
-		return this.raw.then((raw) => {
-			return raw.copyFile(source, target, overwrite);
-		});
+	public existsFile(resource: uri): TPromise<boolean> {
+		return this.raw.existsFile(resource);
 	}
 
-	public createFile(resource: uri, content?: string): TPromise<files.IFileStat> {
-		return this.raw.then((raw) => {
-			return raw.createFile(resource, content);
-		});
+	public resolveContent(resource: uri, options?: IResolveContentOptions): TPromise<IContent> {
+		return this.raw.resolveContent(resource, options);
 	}
 
-	public createFolder(resource: uri): TPromise<files.IFileStat> {
-		return this.raw.then((raw) => {
-			return raw.createFolder(resource);
-		});
+	public resolveStreamContent(resource: uri, options?: IResolveContentOptions): TPromise<IStreamContent> {
+		return this.raw.resolveStreamContent(resource, options);
 	}
 
-	public rename(resource: uri, newName: string): TPromise<files.IFileStat> {
-		return this.raw.then((raw) => {
-			return raw.rename(resource, newName);
-		});
+	public updateContent(resource: uri, value: string, options?: IUpdateContentOptions): TPromise<IFileStat> {
+		return this.raw.updateContent(resource, value, options);
+	}
+
+	public moveFile(source: uri, target: uri, overwrite?: boolean): TPromise<IFileStat> {
+		return this.raw.moveFile(source, target, overwrite);
+	}
+
+	public copyFile(source: uri, target: uri, overwrite?: boolean): TPromise<IFileStat> {
+		return this.raw.copyFile(source, target, overwrite);
+	}
+
+	public createFile(resource: uri, content?: string, options?: ICreateFileOptions): TPromise<IFileStat> {
+		return this.raw.createFile(resource, content, options);
+	}
+
+	public createFolder(resource: uri): TPromise<IFileStat> {
+		return this.raw.createFolder(resource);
+	}
+
+	public touchFile(resource: uri): TPromise<IFileStat> {
+		return this.raw.touchFile(resource);
+	}
+
+	public rename(resource: uri, newName: string): TPromise<IFileStat> {
+		return this.raw.rename(resource, newName);
 	}
 
 	public del(resource: uri, useTrash?: boolean): TPromise<void> {
@@ -161,35 +214,27 @@ export class FileService implements files.IFileService {
 			return this.doMoveItemToTrash(resource);
 		}
 
-		return this.raw.then((raw) => {
-			return raw.del(resource);
-		});
+		return this.raw.del(resource);
 	}
 
-	private doMoveItemToTrash(resource: uri): Promise {
-		let workspace = this.contextService.getWorkspace();
-		if (!workspace) {
-			return Promise.wrapError('Need a workspace to use this');
-		}
-
-		let absolutePath = resource.fsPath;
-
-		let result = shell.moveItemToTrash(absolutePath);
+	private doMoveItemToTrash(resource: uri): TPromise<void> {
+		const absolutePath = resource.fsPath;
+		const result = shell.moveItemToTrash(absolutePath);
 		if (!result) {
-			return TPromise.wrapError(new Error(nls.localize('trashFailed', "Failed to move '{0}' to the trash", paths.basename(absolutePath))));
+			return TPromise.wrapError<void>(new Error(nls.localize('trashFailed', "Failed to move '{0}' to the trash", paths.basename(absolutePath))));
 		}
 
-		return Promise.as(null);
+		this._onAfterOperation.fire(new FileOperationEvent(resource, FileOperation.DELETE));
+
+		return TPromise.as(null);
 	}
 
-	public importFile(source: uri, targetFolder: uri): TPromise<files.IImportResult> {
-		return this.raw.then((raw) => {
-			return raw.importFile(source, targetFolder).then((result) => {
-				return <files.IImportResult> {
-					isNew: result && result.isNew,
-					stat: result && result.stat
-				};
-			});
+	public importFile(source: uri, targetFolder: uri): TPromise<IImportResult> {
+		return this.raw.importFile(source, targetFolder).then((result) => {
+			return <IImportResult>{
+				isNew: result && result.isNew,
+				stat: result && result.stat
+			};
 		});
 	}
 
@@ -207,28 +252,21 @@ export class FileService implements files.IFileService {
 			return;
 		}
 
-		this.raw.then((raw) => {
-			raw.watchFileChanges(resource);
-		});
+		this.raw.watchFileChanges(resource);
 	}
 
-	public unwatchFileChanges(resource: uri): void;
-	public unwatchFileChanges(path: string): void;
-	public unwatchFileChanges(arg1: any): void {
-		this.raw.then((raw) => {
-			raw.unwatchFileChanges(arg1);
-		});
+	public unwatchFileChanges(resource: uri): void {
+		this.raw.unwatchFileChanges(resource);
+	}
+
+	public getEncoding(resource: uri, preferredEncoding?: string): string {
+		return this.raw.getEncoding(resource, preferredEncoding);
 	}
 
 	public dispose(): void {
-
-		// Listeners
-		if (this.configurationChangeListenerUnbind) {
-			this.configurationChangeListenerUnbind();
-			this.configurationChangeListenerUnbind = null;
-		}
+		this.toUnbind = dispose(this.toUnbind);
 
 		// Dispose service
-		this.raw.done((raw) => raw.dispose());
+		this.raw.dispose();
 	}
 }

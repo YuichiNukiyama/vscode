@@ -2,93 +2,45 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
+
 'use strict';
 
-import strings = require('vs/base/common/strings');
-import {FileEditorInput} from 'vs/workbench/parts/files/common/files';
-import {EditorDescriptor, IEditorInputActionContext, EditorInputActionContributor} from 'vs/workbench/browser/parts/editor/baseEditor';
+import URI from 'vs/base/common/uri';
+import { IListService } from 'vs/platform/list/browser/listService';
+import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { FileStat, OpenEditor } from 'vs/workbench/parts/files/common/explorerModel';
+import { toResource } from 'vs/workbench/common/editor';
+import { Tree } from 'vs/base/parts/tree/browser/treeImpl';
 
-/**
- * A variant of the editor input action contributor to contribute only to inputs that match a set of given mimes
- * and implement the FileEditorInput API. This is useful to dynamically contribute editor actions to specific
- * file types.
- */
-export class FileEditorInputActionContributor extends EditorInputActionContributor {
-	private mimes: string[];
-
-	constructor(mimes: string[]) {
-		super();
-
-		this.mimes = mimes;
+// Commands can get exeucted from a command pallete, from a context menu or from some list using a keybinding
+// To cover all these cases we need to properly compute the resource on which the command is being executed
+export function getResourceForCommand(resource: URI, listService: IListService, editorService: IWorkbenchEditorService): URI {
+	if (URI.isUri(resource)) {
+		return resource;
 	}
 
-	/* We override toId() to make the caching of actions based on the mime of the input if given */
-	protected toId(context: IEditorInputActionContext): string {
-		let id = super.toId(context);
-
-		let mime = this.getMimeFromContext(context);
-		if (mime) {
-			id += mime;
+	const list = listService.lastFocusedList;
+	if (list && list.isDOMFocused()) {
+		const focus = list.getFocus();
+		if (focus instanceof FileStat) {
+			return focus.resource;
+		} else if (focus instanceof OpenEditor) {
+			return focus.editorInput.getResource();
 		}
-
-		return id;
 	}
 
-	private getMimeFromContext(context: IEditorInputActionContext): string {
-		if (context && context.input && context.input instanceof FileEditorInput) {
-			let fileInput = <FileEditorInput>context.input;
-			return fileInput.getMime();
-		}
-
-		return null;
-	}
-
-	private hasMime(context: IEditorInputActionContext): boolean {
-		let mime = this.getMimeFromContext(context);
-		if (mime) {
-			let mimes = mime.split(',');
-			for (let i = 0; i < mimes.length; i++) {
-				if (this.mimes.indexOf(strings.trim(mimes[i])) >= 0) {
-					return true;
-				}
-			}
-		}
-
-		return false;
-	}
-
-	public hasActions(context: IEditorInputActionContext): boolean {
-		if (!this.hasMime(context)) {
-			return false;
-		}
-
-		return super.hasActions(context);
-	}
-
-	public hasSecondaryActions(context: IEditorInputActionContext): boolean {
-		if (!this.hasMime(context)) {
-			return false;
-		}
-
-		return super.hasSecondaryActions(context);
-	}
+	return toResource(editorService.getActiveEditorInput(), { supportSideBySide: true });
 }
 
-/**
- * A lightweight descriptor of an editor for files. Optionally allows to specify a list of mime types the editor
- * should be used for. This allows for fine grained contribution of editors to the Platform based on mime types. Wildcards
- * can be used (e.g. text/*) to register an editor on a wider range of mime types.
- */
-export class FileEditorDescriptor extends EditorDescriptor {
-	private mimetypes: string[];
-
-	constructor(id: string, name: string, moduleId: string, ctorName: string, mimetypes: string[]) {
-		super(id, name, moduleId, ctorName);
-
-		this.mimetypes = mimetypes;
+export function getResourcesForCommand(resource: URI, listService: IListService, editorService: IWorkbenchEditorService): URI[] {
+	const list = listService.lastFocusedList;
+	if (list && list.isDOMFocused() && list instanceof Tree) {
+		const selection = list.getSelection();
+		if (selection && selection.length > 1) {
+			return selection.map(fs => fs.resource);
+		}
 	}
 
-	public getMimeTypes(): string[] {
-		return this.mimetypes;
-	}
+	const result = getResourceForCommand(resource, listService, editorService);
+	return !!result ? [result] : [];
 }

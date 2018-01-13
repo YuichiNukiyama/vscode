@@ -3,53 +3,59 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import { workspace, DocumentRangeFormattingEditProvider, OnTypeFormattingEditProvider, FormattingOptions, TextDocument, Position, Range, CancellationToken, TextEdit } from 'vscode';
+import { DocumentRangeFormattingEditProvider, OnTypeFormattingEditProvider, FormattingOptions, TextDocument, Position, Range, CancellationToken, TextEdit, WorkspaceConfiguration, Disposable, languages, workspace, DocumentSelector } from 'vscode';
 
 import * as Proto from '../protocol';
-import { ITypescriptServiceClient } from '../typescriptService';
+import { ITypeScriptServiceClient } from '../typescriptService';
+import { tsTextSpanToVsRange } from '../utils/convert';
+import FormattingConfigurationManager from './formattingConfigurationManager';
 
-export default class TypeScriptFormattingProvider implements DocumentRangeFormattingEditProvider, OnTypeFormattingEditProvider {
+export class TypeScriptFormattingProvider implements DocumentRangeFormattingEditProvider, OnTypeFormattingEditProvider {
+	private enabled: boolean = true;
 
-	private client: ITypescriptServiceClient;
-	private formatOptions: { [key: string]: Proto.FormatOptions; };
+	public constructor(
+		private readonly client: ITypeScriptServiceClient,
+		private readonly formattingOptionsManager: FormattingConfigurationManager
+	) { }
 
-	public constructor(client: ITypescriptServiceClient) {
-		this.client = client;
-		this.formatOptions = Object.create(null);
+	public updateConfiguration(config: WorkspaceConfiguration): void {
+		this.enabled = config.get('format.enable', true);
 	}
 
-	private ensureFormatOptions(document: TextDocument, options: FormattingOptions, token: CancellationToken): Promise<Proto.FormatOptions> {
-		let key = document.uri.toString();
-		let currentOptions = this.formatOptions[key];
-		if (currentOptions && currentOptions.tabSize === options.tabSize && currentOptions.indentSize === options.tabSize && currentOptions.convertTabsToSpaces === options.insertSpaces) {
-			return Promise.resolve(currentOptions);
-		} else {
-			let args: Proto.ConfigureRequestArguments = {
-				file: this.client.asAbsolutePath(document.uri),
-				formatOptions: this.getFormatOptions(options)
-			};
-			return this.client.execute('configure', args, token).then((response) => {
-				this.formatOptions[key] = args.formatOptions;
-				return args.formatOptions;
-			});
-		}
+	public isEnabled(): boolean {
+		return this.enabled;
 	}
 
-	private doFormat(document: TextDocument, options: FormattingOptions, args: Proto.FormatRequestArgs, token: CancellationToken): Promise<TextEdit[]> {
-		return this.ensureFormatOptions(document, options, token).then(() => {
-			return this.client.execute('format', args, token).then((response): TextEdit[] => {
+	private async doFormat(
+		document: TextDocument,
+		options: FormattingOptions,
+		args: Proto.FormatRequestArgs,
+		token: CancellationToken
+	): Promise<TextEdit[]> {
+		await this.formattingOptionsManager.ensureFormatOptions(document, options, token);
+		try {
+			const response = await this.client.execute('format', args, token);
+			if (response.body) {
 				return response.body.map(this.codeEdit2SingleEditOperation);
-			}, (err: any) => {
-				return [];
-			});
-		});
+			}
+		} catch {
+			// noop
+		}
+		return [];
 	}
 
-	public provideDocumentRangeFormattingEdits(document: TextDocument, range: Range, options: FormattingOptions, token: CancellationToken): Promise<TextEdit[]> {
-		let args: Proto.FormatRequestArgs = {
-			file: this.client.asAbsolutePath(document.uri),
+	public async provideDocumentRangeFormattingEdits(
+		document: TextDocument,
+		range: Range,
+		options: FormattingOptions,
+		token: CancellationToken
+	): Promise<TextEdit[]> {
+		const absPath = this.client.normalizePath(document.uri);
+		if (!absPath) {
+			return [];
+		}
+		const args: Proto.FormatRequestArgs = {
+			file: absPath,
 			line: range.start.line + 1,
 			offset: range.start.character + 1,
 			endLine: range.end.line + 1,
@@ -58,35 +64,84 @@ export default class TypeScriptFormattingProvider implements DocumentRangeFormat
 		return this.doFormat(document, options, args, token);
 	}
 
-	public provideOnTypeFormattingEdits(document: TextDocument, position: Position, ch: string, options: FormattingOptions, token: CancellationToken): Promise<TextEdit[]> {
-		let args: Proto.FormatOnKeyRequestArgs = {
-			file: this.client.asAbsolutePath(document.uri),
+	public async provideOnTypeFormattingEdits(
+		document: TextDocument,
+		position: Position,
+		ch: string,
+		options: FormattingOptions,
+		token: CancellationToken
+	): Promise<TextEdit[]> {
+		const filepath = this.client.normalizePath(document.uri);
+		if (!filepath) {
+			return [];
+		}
+		const args: Proto.FormatOnKeyRequestArgs = {
+			file: filepath,
 			line: position.line + 1,
 			offset: position.character + 1,
 			key: ch
 		};
 
-		return this.ensureFormatOptions(document, options, token).then(() => {
-			return this.client.execute('formatonkey', args, token).then((response): TextEdit[] => {
-				return response.body.map(this.codeEdit2SingleEditOperation);
-			}, (err: any) => {
-				return [];
-			});
+		await this.formattingOptionsManager.ensureFormatOptions(document, options, token);
+		return this.client.execute('formatonkey', args, token).then((response): TextEdit[] => {
+			let edits = response.body;
+			let result: TextEdit[] = [];
+			if (!edits) {
+				return result;
+			}
+			for (let edit of edits) {
+				let textEdit = this.codeEdit2SingleEditOperation(edit);
+				let range = textEdit.range;
+				// Work around for https://github.com/Microsoft/TypeScript/issues/6700.
+				// Check if we have an edit at the beginning of the line which only removes white spaces and leaves
+				// an empty line. Drop those edits
+				if (range.start.character === 0 && range.start.line === range.end.line && textEdit.newText === '') {
+					let lText = document.lineAt(range.start.line).text;
+					// If the edit leaves something on the line keep the edit (note that the end character is exclusive).
+					// Keep it also if it removes something else than whitespace
+					if (lText.trim().length > 0 || lText.length > range.end.character) {
+						result.push(textEdit);
+					}
+				} else {
+					result.push(textEdit);
+				}
+			}
+			return result;
+		}, () => {
+			return [];
 		});
 	}
 
 	private codeEdit2SingleEditOperation(edit: Proto.CodeEdit): TextEdit {
-		return new TextEdit(new Range(edit.start.line - 1, edit.start.offset - 1, edit.end.line - 1, edit.end.offset - 1),
-			edit.newText);
+		return new TextEdit(tsTextSpanToVsRange(edit), edit.newText);
+	}
+}
+
+export class FormattingProviderManager {
+	private formattingProviderRegistration: Disposable | undefined;
+
+	constructor(
+		private readonly modeId: string,
+		private readonly formattingProvider: TypeScriptFormattingProvider,
+		private readonly selector: DocumentSelector
+	) { }
+
+	public dispose() {
+		if (this.formattingProviderRegistration) {
+			this.formattingProviderRegistration.dispose();
+			this.formattingProviderRegistration = undefined;
+		}
 	}
 
-	private getFormatOptions(options: FormattingOptions): Proto.FormatOptions {
-		return {
-			tabSize: options.tabSize,
-			indentSize: options.tabSize,
-			convertTabsToSpaces: options.insertSpaces,
-			// We can use \n here since the editor normalizes later on to its line endings.
-			newLineCharacter: '\n'
-		};
+	public updateConfiguration(): void {
+		const config = workspace.getConfiguration(this.modeId);
+		this.formattingProvider.updateConfiguration(config);
+
+		if (!this.formattingProvider.isEnabled() && this.formattingProviderRegistration) {
+			this.formattingProviderRegistration.dispose();
+			this.formattingProviderRegistration = undefined;
+		} else if (this.formattingProvider.isEnabled() && !this.formattingProviderRegistration) {
+			this.formattingProviderRegistration = languages.registerDocumentRangeFormattingEditProvider(this.selector, this.formattingProvider);
+		}
 	}
 }

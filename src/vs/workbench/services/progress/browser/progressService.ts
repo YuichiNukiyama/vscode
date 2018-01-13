@@ -2,14 +2,14 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import {TPromise} from 'vs/base/common/winjs.base';
+import lifecycle = require('vs/base/common/lifecycle');
+import { TPromise } from 'vs/base/common/winjs.base';
 import types = require('vs/base/common/types');
-import {ProgressBar} from 'vs/base/browser/ui/progressbar/progressbar';
-import {EditorEvent, EventType, CompositeEvent} from 'vs/workbench/common/events';
-import {IEventService} from 'vs/platform/event/common/event';
-import {IProgressService, IProgressRunner} from 'vs/platform/progress/common/progress';
+import { ProgressBar } from 'vs/base/browser/ui/progressbar/progressbar';
+import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
+import { IPanelService } from 'vs/workbench/services/panel/common/panelService';
+import { IProgressService, IProgressRunner } from 'vs/platform/progress/common/progress';
 
 interface ProgressState {
 	infinite?: boolean;
@@ -17,47 +17,37 @@ interface ProgressState {
 	worked?: number;
 	done?: boolean;
 	whilePromise?: TPromise<any>;
+	whileStart?: number;
+	whileDelay?: number;
 }
 
 export abstract class ScopedService {
-	private _eventService: IEventService;
-	private scopeId: string;
 
-	constructor(eventService: IEventService, scopeId: string) {
-		this._eventService = eventService;
-		this.scopeId = scopeId;
+	protected toDispose: lifecycle.IDisposable[];
 
+	constructor(private viewletService: IViewletService, private panelService: IPanelService, private scopeId: string) {
+		this.toDispose = [];
 		this.registerListeners();
 	}
 
-	public get eventService(): IEventService {
-		return this._eventService;
+	public registerListeners(): void {
+		this.toDispose.push(this.viewletService.onDidViewletOpen(viewlet => this.onScopeOpened(viewlet.getId())));
+		this.toDispose.push(this.panelService.onDidPanelOpen(panel => this.onScopeOpened(panel.getId())));
+
+		this.toDispose.push(this.viewletService.onDidViewletClose(viewlet => this.onScopeClosed(viewlet.getId())));
+		this.toDispose.push(this.panelService.onDidPanelClose(panel => this.onScopeClosed(panel.getId())));
 	}
 
-	public registerListeners(): void {
-		this.eventService.addListener(EventType.EDITOR_CLOSED, (e: EditorEvent) => {
-			if (e.editorId === this.scopeId) {
-				this.onScopeDeactivated();
-			}
-		});
+	private onScopeClosed(scopeId: string) {
+		if (scopeId === this.scopeId) {
+			this.onScopeDeactivated();
+		}
+	}
 
-		this.eventService.addListener(EventType.EDITOR_OPENED, (e: EditorEvent) => {
-			if (e.editorId === this.scopeId) {
-				this.onScopeActivated();
-			}
-		});
-
-		this.eventService.addListener(EventType.COMPOSITE_CLOSED, (e: CompositeEvent) => {
-			if (e.compositeId === this.scopeId) {
-				this.onScopeDeactivated();
-			}
-		});
-
-		this.eventService.addListener(EventType.COMPOSITE_OPENED, (e: CompositeEvent) => {
-			if (e.compositeId === this.scopeId) {
-				this.onScopeActivated();
-			}
-		});
+	private onScopeOpened(scopeId: string) {
+		if (scopeId === this.scopeId) {
+			this.onScopeActivated();
+		}
 	}
 
 	public abstract onScopeActivated(): void;
@@ -66,17 +56,23 @@ export abstract class ScopedService {
 }
 
 export class WorkbenchProgressService extends ScopedService implements IProgressService {
-	public serviceId = IProgressService;
+	public _serviceBrand: any;
 	private isActive: boolean;
 	private progressbar: ProgressBar;
 	private progressState: ProgressState;
 
-	constructor(eventService: IEventService, progressbar: ProgressBar, scopeId?: string, isActive?: boolean) {
-		super(eventService, scopeId);
+	constructor(
+		progressbar: ProgressBar,
+		scopeId: string,
+		isActive: boolean,
+		@IViewletService viewletService: IViewletService,
+		@IPanelService panelService: IPanelService
+	) {
+		super(viewletService, panelService, scopeId);
 
 		this.progressbar = progressbar;
 		this.isActive = isActive || types.isUndefinedOrNull(scopeId); // If service is unscoped, enable by default
-		this.progressState = {};
+		this.progressState = Object.create(null);
 	}
 
 	public onScopeDeactivated(): void {
@@ -93,7 +89,15 @@ export class WorkbenchProgressService extends ScopedService implements IProgress
 
 		// Replay Infinite Progress from Promise
 		if (this.progressState.whilePromise) {
-			this.doShowWhile();
+			let delay: number;
+			if (this.progressState.whileDelay > 0) {
+				const remainingDelay = this.progressState.whileDelay - (Date.now() - this.progressState.whileStart);
+				if (remainingDelay > 0) {
+					delay = remainingDelay;
+				}
+			}
+
+			this.doShowWhile(delay);
 		}
 
 		// Replay Infinite Progress
@@ -114,11 +118,13 @@ export class WorkbenchProgressService extends ScopedService implements IProgress
 	}
 
 	private clearProgressState(): void {
-		delete this.progressState.infinite;
-		delete this.progressState.done;
-		delete this.progressState.worked;
-		delete this.progressState.total;
-		delete this.progressState.whilePromise;
+		this.progressState.infinite = void 0;
+		this.progressState.done = void 0;
+		this.progressState.worked = void 0;
+		this.progressState.total = void 0;
+		this.progressState.whilePromise = void 0;
+		this.progressState.whileStart = void 0;
+		this.progressState.whileDelay = void 0;
 	}
 
 	public show(infinite: boolean, delay?: number): IProgressRunner;
@@ -192,8 +198,8 @@ export class WorkbenchProgressService extends ScopedService implements IProgress
 				// Otherwise the progress bar does not support worked(), we fallback to infinite() progress
 				else {
 					this.progressState.infinite = true;
-					delete this.progressState.worked;
-					delete this.progressState.total;
+					this.progressState.worked = void 0;
+					this.progressState.total = void 0;
 					this.progressbar.infinite().getContainer().show();
 				}
 			},
@@ -209,7 +215,7 @@ export class WorkbenchProgressService extends ScopedService implements IProgress
 		};
 	}
 
-	public showWhile(promise: TPromise<any>, delay?: number): TPromise<any> {
+	public showWhile(promise: TPromise<any>, delay?: number): TPromise<void> {
 		let stack: boolean = !!this.progressState.whilePromise;
 
 		// Reset State
@@ -224,6 +230,8 @@ export class WorkbenchProgressService extends ScopedService implements IProgress
 
 		// Keep Promise in State
 		this.progressState.whilePromise = promise;
+		this.progressState.whileDelay = delay || 0;
+		this.progressState.whileStart = Date.now();
 
 		let stop = () => {
 
@@ -255,5 +263,9 @@ export class WorkbenchProgressService extends ScopedService implements IProgress
 				this.progressbar.infinite().getContainer().showDelayed(delay);
 			}
 		}
+	}
+
+	public dispose(): void {
+		this.toDispose = lifecycle.dispose(this.toDispose);
 	}
 }

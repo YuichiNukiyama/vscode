@@ -4,136 +4,54 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import objects = require('vs/base/common/objects');
-import types = require('vs/base/common/types');
+import URI from 'vs/base/common/uri';
 
-export interface IMarshallingContribution {
-
-	canSerialize(obj:any): boolean;
-
-	serialize(obj:any, serialize:(obj:any)=>any): any;
-
-	canDeserialize(obj:any): boolean;
-
-	deserialize(obj:any, deserialize:(obj:any)=>any): any;
-
+export function stringify(obj: any): string {
+	return JSON.stringify(obj, replacer);
 }
 
-var marshallingContributions:IMarshallingContribution[] = [];
-
-export function registerMarshallingContribution(contribution:IMarshallingContribution): void {
-	marshallingContributions.push(contribution);
+export function parse(text: string): any {
+	let data = JSON.parse(text);
+	data = revive(data, 0);
+	return data;
 }
 
-var currentDynamicContrib:IMarshallingContribution = null;
-
-export function canSerialize(obj: any): boolean {
-	for (let contrib of marshallingContributions) {
-		if (contrib.canSerialize(obj)) {
-			return true;
-		}
-	}
-	if (currentDynamicContrib && currentDynamicContrib.canSerialize(obj)) {
-		return true;
-	}
+interface MarshalledObject {
+	$mid: number;
 }
 
-export function serialize(obj:any): any {
-	return objects.cloneAndChange(obj, (orig:any) => {
-		if (typeof orig === 'object') {
-			for (var i = 0; i < marshallingContributions.length; i++) {
-				var contrib = marshallingContributions[i];
-				if (contrib.canSerialize(orig)) {
-					return contrib.serialize(orig, serialize);
-				}
-			}
-			if (currentDynamicContrib && currentDynamicContrib.canSerialize(orig)) {
-				return currentDynamicContrib.serialize(orig, serialize);
-			}
-		}
-		return undefined;
-	});
-}
-
-export function deserialize(obj:any): any {
-	return objects.cloneAndChange(obj, (orig:any) => {
-		if (types.isObject(orig)) {
-			for (var i = 0; i < marshallingContributions.length; i++) {
-				var contrib = marshallingContributions[i];
-				if (contrib.canDeserialize(orig)) {
-					return contrib.deserialize(orig, deserialize);
-				}
-			}
-			if (currentDynamicContrib && currentDynamicContrib.canDeserialize(orig)) {
-				return currentDynamicContrib.deserialize(orig, deserialize);
-			}
-		}
-		return undefined;
-	});
-}
-
-// RegExp marshaller
-
-interface ISerializedRegExp {
-	$isRegExp: boolean;
-	source: string;
-	flags: string;
-}
-
-registerMarshallingContribution({
-
-	canSerialize: (obj:any): boolean => {
-		return obj instanceof RegExp;
-	},
-
-	serialize: (regex:RegExp, serialize:(obj:any)=>any): ISerializedRegExp => {
-		var flags = '';
-
-		if (regex.global) {
-			flags += 'g';
-		} else if (regex.ignoreCase) {
-			flags += 'i';
-		} else if (regex.multiline) {
-			flags += 'm';
-		}
-
+function replacer(key: string, value: any): any {
+	// URI is done via toJSON-member
+	if (value instanceof RegExp) {
 		return {
-			$isRegExp: true,
-			source: regex.source,
-			flags: flags
+			$mid: 2,
+			source: (<RegExp>value).source,
+			flags: ((<RegExp>value).global ? 'g' : '') + ((<RegExp>value).ignoreCase ? 'i' : '') + ((<RegExp>value).multiline ? 'm' : ''),
 		};
-	},
+	}
+	return value;
+}
 
-	canDeserialize: (obj:ISerializedRegExp): boolean => {
-		return obj.$isRegExp;
-	},
+export function revive(obj: any, depth: number): any {
 
-	deserialize: (obj:ISerializedRegExp, deserialize:(obj:any)=>any): any => {
-		return new RegExp(obj.source, obj.flags);
+	if (!obj || depth > 200) {
+		return obj;
 	}
 
-});
+	if (typeof obj === 'object') {
 
+		switch ((<MarshalledObject>obj).$mid) {
+			case 1: return URI.revive(obj);
+			case 2: return new RegExp(obj.source, obj.flags);
+		}
 
+		// walk object (or array)
+		for (let key in obj) {
+			if (Object.hasOwnProperty.call(obj, key)) {
+				obj[key] = revive(obj[key], depth + 1);
+			}
+		}
+	}
 
-export function marshallObject(obj: any, dynamicContrib: IMarshallingContribution = null): string {
-	currentDynamicContrib = dynamicContrib;
-	const r = serialize(obj);
-	currentDynamicContrib = null;
-	return r;
-}
-
-export function marshallObjectAndStringify(obj: any, dynamicContrib: IMarshallingContribution = null): string {
-	return JSON.stringify(marshallObject(obj, dynamicContrib));
-}
-
-export function demarshallObject(data: any, dynamicContrib: IMarshallingContribution = null) {
-	currentDynamicContrib = dynamicContrib;
-	const r = deserialize(data);
-	currentDynamicContrib = null;
-	return r;
-}
-
-export function parseAndDemarshallObject(serialized: string, dynamicContrib: IMarshallingContribution = null): any {
-	return demarshallObject(JSON.parse(serialized), dynamicContrib);
+	return obj;
 }

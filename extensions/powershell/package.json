@@ -8,12 +8,19 @@
 			"id": "powershell",
 			"extensions": [ ".ps1", ".psm1", ".psd1", ".pssc", ".psrc" ],
 			"aliases": [ "PowerShell", "powershell", "ps", "ps1" ],
-			"configuration": "./powershell.configuration.json"
+			"configuration": "./language-configuration.json"
 		}],
 		"grammars": [{
 			"language": "powershell",
 			"scopeName": "source.powershell",
 			"path": "./syntaxes/PowershellSyntax.tmLanguage"
+		}],
+		"snippets": [{
+			"language": "powershell",
+			"path": "./snippets/powershell.json"
 		}]
+	},
+	"scripts": {
+		"update-grammar": "node ../../build/npm/update-grammar.js SublimeText/PowerShell Support/PowershellSyntax.tmLanguage ./syntaxes/powershell.tmLanguage.json"
 	}
 }

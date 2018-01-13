@@ -5,283 +5,232 @@
 
 'use strict';
 
-// import 'vs/css!./media/iframeeditor';
-import {localize} from 'vs/nls';
-import {TPromise} from 'vs/base/common/winjs.base';
-import {IModel, EventType} from 'vs/editor/common/editorCommon';
-import {Dimension, Builder} from 'vs/base/browser/builder';
-import {cAll} from 'vs/base/common/lifecycle';
-import {EditorOptions, EditorInput} from 'vs/workbench/common/editor';
-import {BaseEditor} from 'vs/workbench/browser/parts/editor/baseEditor';
-import {Position} from 'vs/platform/editor/common/editor';
-import {ITelemetryService} from 'vs/platform/telemetry/common/telemetry';
-import {IStorageService, StorageEventType} from 'vs/platform/storage/common/storage';
-import {IWorkbenchEditorService} from 'vs/workbench/services/editor/common/editorService';
-import {ResourceEditorModel} from 'vs/workbench/common/editor/resourceEditorModel';
-import {Preferences} from 'vs/workbench/common/constants';
-import {HtmlInput} from 'vs/workbench/parts/html/common/htmlInput';
+import { localize } from 'vs/nls';
+import { TPromise } from 'vs/base/common/winjs.base';
+import { ITextModel } from 'vs/editor/common/model';
+import { Dimension, Builder } from 'vs/base/browser/builder';
+import { empty as EmptyDisposable, IDisposable, dispose, IReference } from 'vs/base/common/lifecycle';
+import { EditorOptions, EditorInput } from 'vs/workbench/common/editor';
+import { Position } from 'vs/platform/editor/common/editor';
+import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
+import { BaseTextEditorModel } from 'vs/workbench/common/editor/textEditorModel';
+import { HtmlInput, HtmlInputOptions, areHtmlInputOptionsEqual } from 'vs/workbench/parts/html/common/htmlInput';
+import { IThemeService } from 'vs/platform/theme/common/themeService';
+import { IOpenerService } from 'vs/platform/opener/common/opener';
+import { ITextModelService, ITextEditorModel } from 'vs/editor/common/services/resolverService';
+import { Parts, IPartService } from 'vs/workbench/services/part/common/partService';
+import { IContextViewService } from 'vs/platform/contextview/browser/contextView';
+import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
+
+import Webview, { WebviewOptions } from './webview';
+import { IStorageService } from 'vs/platform/storage/common/storage';
+import { WebviewEditor } from './webviewEditor';
+
 
 /**
- * An implementation of editor for showing HTML content in an IFrame by leveraging the IFrameEditorInput.
+ * An implementation of editor for showing HTML content in an IFrame by leveraging the HTML input.
  */
-export class HtmlPreviewPart extends BaseEditor {
+export class HtmlPreviewPart extends WebviewEditor {
 
 	static ID: string = 'workbench.editor.htmlPreviewPart';
+	static class: string = 'htmlPreviewPart';
 
-	private _editorService: IWorkbenchEditorService;
-	private _storageService: IStorageService;
-	private _iFrameElement: HTMLIFrameElement;
+	private _webviewDisposables: IDisposable[];
 
-	private _model: IModel;
-	private _modelChangeUnbind: Function;
-	private _lastModelVersion: number;
-	private _themeChangeUnbind: Function;
+	private _modelRef: IReference<ITextEditorModel>;
+	public get model(): ITextModel { return this._modelRef && this._modelRef.object.textEditorModel; }
+	private _modelChangeSubscription = EmptyDisposable;
+	private _themeChangeSubscription = EmptyDisposable;
+
+	private scrollYPercentage: number = 0;
 
 	constructor(
 		@ITelemetryService telemetryService: ITelemetryService,
-		@IWorkbenchEditorService editorService: IWorkbenchEditorService,
-		@IStorageService storageService: IStorageService
+		@ITextModelService private textModelResolverService: ITextModelService,
+		@IThemeService themeService: IThemeService,
+		@IOpenerService private readonly openerService: IOpenerService,
+		@IPartService private partService: IPartService,
+		@IStorageService storageService: IStorageService,
+		@IContextViewService private _contextViewService: IContextViewService,
+		@IContextKeyService contextKeyService: IContextKeyService
 	) {
-		super(HtmlPreviewPart.ID, telemetryService);
-
-		this._editorService = editorService;
-		this._storageService = storageService;
+		super(HtmlPreviewPart.ID, telemetryService, themeService, storageService, contextKeyService);
 	}
 
 	dispose(): void {
-		// remove from dome
-		const element = this._iFrameElement.parentElement;
-		element.parentElement.removeChild(element);
+		// remove from dom
+		this._webviewDisposables = dispose(this._webviewDisposables);
 
-		// unhook from model
-		this._modelChangeUnbind = cAll(this._modelChangeUnbind);
-		this._model = undefined;
+		// unhook listeners
+		this._themeChangeSubscription.dispose();
+		this._modelChangeSubscription.dispose();
 
-		this._themeChangeUnbind = cAll(this._themeChangeUnbind);
+		// dipose model ref
+		dispose(this._modelRef);
+		super.dispose();
 	}
 
-	public createEditor(parent: Builder): void {
+	protected createEditor(parent: Builder): void {
+		this.content = document.createElement('div');
+		this.content.style.position = 'absolute';
+		this.content.classList.add(HtmlPreviewPart.class);
+		parent.getHTMLElement().appendChild(this.content);
+	}
 
-		// IFrame
-		// this.iframeBuilder.removeProperty(IFrameEditor.RESOURCE_PROPERTY);
-		this._iFrameElement = document.createElement('iframe');
-		this._iFrameElement.setAttribute('frameborder', '0');
-		this._iFrameElement.className = 'iframe';
-
-		// Container for IFrame
-		const iFrameContainerElement = document.createElement('div');
-		iFrameContainerElement.className = 'iframe-container monaco-editor-background'; // Inherit the background color from selected theme
-		iFrameContainerElement.appendChild(this._iFrameElement);
-
-		parent.getHTMLElement().appendChild(iFrameContainerElement);
-
-		this._themeChangeUnbind = this._storageService.addListener(StorageEventType.STORAGE, event => {
-			if (event.key === Preferences.THEME && this.isVisible()) {
-				this._updateIFrameContent(true);
+	private get webview(): Webview {
+		if (!this._webview) {
+			let webviewOptions: WebviewOptions = {};
+			if (this.input && this.input instanceof HtmlInput) {
+				webviewOptions = this.input.options;
 			}
-		});
-	}
 
-	public layout(dimension: Dimension): void {
-		let {width, height} = dimension;
-		this._iFrameElement.parentElement.style.width = `${width}px`;
-		this._iFrameElement.parentElement.style.height = `${height}px`;
-		this._iFrameElement.style.width = `${width}px`;
-		this._iFrameElement.style.height = `${height}px`;
-	}
+			this._webview = new Webview(this.content, this.partService.getContainer(Parts.EDITOR_PART), this._contextViewService, this.contextKey, this.findInputFocusContextKey, webviewOptions);
+			if (this.input && this.input instanceof HtmlInput) {
+				const state = this.loadViewState(this.input.getResource());
+				this.scrollYPercentage = state ? state.scrollYPercentage : 0;
+				this.webview.initialScrollProgress = this.scrollYPercentage;
 
-	public focus(): void {
-		// this.iframeContainer.domFocus();
-		this._iFrameElement.focus();
-	}
-
-	// --- input
-
-	public getTitle(): string {
-		if (!this.input) {
-			return localize('iframeEditor', 'Preview Html');
+				const resourceUri = this.input.getResource();
+				this.webview.baseUrl = resourceUri.toString(true);
+			}
+			this.onThemeChange(this.themeService.getTheme());
+			this._webviewDisposables = [
+				this._webview,
+				this._webview.onDidClickLink(uri => this.openerService.open(uri)),
+				this._webview.onDidScroll(data => {
+					this.scrollYPercentage = data.scrollYPercentage;
+				}),
+			];
 		}
-		return this.input.getName();
-	}
-
-	public setVisible(visible: boolean, position?: Position): TPromise<void> {
-		return super.setVisible(visible, position).then(() => {
-			if (visible && this._model) {
-				this._modelChangeUnbind = this._model.addListener(EventType.ModelContentChanged2, () => this._updateIFrameContent());
-				this._updateIFrameContent();
-			} else {
-				this._modelChangeUnbind = cAll(this._modelChangeUnbind);
-			}
-		})
+		return this._webview;
 	}
 
 	public changePosition(position: Position): void {
-		super.changePosition(position);
+		// what this actually means is that we got reparented. that
+		// has caused the webview to stop working and we need to reset it
+		this._doSetVisible(false);
+		this._doSetVisible(true);
 
-		// reparenting an IFRAME into another DOM element yields weird results when the contents are made
-		// of a string and not a URL. to be on the safe side we reload the iframe when the position changes
-		// and we do it using a timeout of 0 to reload only after the position has been changed in the DOM
-		setTimeout(() => {
-			this._updateIFrameContent(true);
-		}, 0);
+		super.changePosition(position);
 	}
 
-	public setInput(input: EditorInput, options: EditorOptions): TPromise<void> {
+	protected setEditorVisible(visible: boolean, position?: Position): void {
+		this._doSetVisible(visible);
+		super.setEditorVisible(visible, position);
+	}
 
-		this._model = undefined;
-		this._modelChangeUnbind = cAll(this._modelChangeUnbind);
-		this._lastModelVersion = -1;
+	private _doSetVisible(visible: boolean): void {
+		if (!visible) {
+			this._themeChangeSubscription.dispose();
+			this._modelChangeSubscription.dispose();
+			this._webviewDisposables = dispose(this._webviewDisposables);
+			this._webview = undefined;
+		} else {
+			this._themeChangeSubscription = this.themeService.onThemeChange(this.onThemeChange.bind(this));
+
+			if (this._hasValidModel()) {
+				this._modelChangeSubscription = this.model.onDidChangeContent(() => this.webview.contents = this.model.getLinesContent());
+				this.webview.contents = this.model.getLinesContent();
+			}
+		}
+	}
+
+	private _hasValidModel(): boolean {
+		return this._modelRef && this.model && !this.model.isDisposed();
+	}
+
+	public layout(dimension: Dimension): void {
+		const { width, height } = dimension;
+		this.content.style.width = `${width}px`;
+		this.content.style.height = `${height}px`;
+		if (this._webview) {
+			this._webview.layout();
+		}
+	}
+
+	public focus(): void {
+		this.webview.focus();
+	}
+
+	public clearInput(): void {
+		if (this.input instanceof HtmlInput) {
+			this.saveViewState(this.input.getResource(), {
+				scrollYPercentage: this.scrollYPercentage
+			});
+		}
+		dispose(this._modelRef);
+		this._modelRef = undefined;
+		super.clearInput();
+	}
+
+	public shutdown(): void {
+		if (this.input instanceof HtmlInput) {
+			this.saveViewState(this.input.getResource(), {
+				scrollYPercentage: this.scrollYPercentage
+			});
+		}
+		super.shutdown();
+	}
+
+	public sendMessage(data: any): void {
+		this.webview.sendMessage(data);
+	}
+
+	public setInput(input: EditorInput, options?: EditorOptions): TPromise<void> {
+
+		if (this.input && this.input.matches(input) && this._hasValidModel() && this.input instanceof HtmlInput && input instanceof HtmlInput && areHtmlInputOptionsEqual(this.input.options, input.options)) {
+			return TPromise.as(undefined);
+		}
+
+		let oldOptions: HtmlInputOptions | undefined = undefined;
+
+		if (this.input instanceof HtmlInput) {
+			oldOptions = this.input.options;
+			this.saveViewState(this.input.getResource(), {
+				scrollYPercentage: this.scrollYPercentage
+			});
+		}
+
+		if (this._modelRef) {
+			this._modelRef.dispose();
+		}
+		this._modelChangeSubscription.dispose();
 
 		if (!(input instanceof HtmlInput)) {
-			return TPromise.wrapError<void>('Invalid input');
+			return TPromise.wrapError<void>(new Error('Invalid input'));
 		}
 
-		return this._editorService.resolveEditorModel(input).then(model => {
-			if (model instanceof ResourceEditorModel) {
-				this._model = model.textEditorModel
-			}
+		return super.setInput(input, options).then(() => {
+			const resourceUri = input.getResource();
+			return this.textModelResolverService.createModelReference(resourceUri).then(ref => {
+				const model = ref.object;
 
-			if (!this._model) {
-				return TPromise.wrapError<void>(localize('html.voidInput', "Invalid editor input."));
-			}
+				if (model instanceof BaseTextEditorModel) {
+					this._modelRef = ref;
+				}
 
-			this._modelChangeUnbind = this._model.addListener(EventType.ModelContentChanged2, () => this._updateIFrameContent());
-			this._updateIFrameContent();
+				if (!this.model) {
+					return TPromise.wrapError<void>(new Error(localize('html.voidInput', "Invalid editor input.")));
+				}
 
-			return super.setInput(input, options);
+				if (oldOptions && !areHtmlInputOptionsEqual(oldOptions, input.options)) {
+					this._doSetVisible(false);
+				}
+
+				this._modelChangeSubscription = this.model.onDidChangeContent(() => {
+					if (this.model) {
+						this.scrollYPercentage = 0;
+						this.webview.contents = this.model.getLinesContent();
+					}
+				});
+				const state = this.loadViewState(resourceUri);
+				this.scrollYPercentage = state ? state.scrollYPercentage : 0;
+				this.webview.baseUrl = resourceUri.toString(true);
+				this.webview.options = input.options;
+				this.webview.contents = this.model.getLinesContent();
+				this.webview.initialScrollProgress = this.scrollYPercentage;
+				return undefined;
+			});
 		});
-	}
-
-	private _updateIFrameContent(refresh: boolean = false): void {
-
-		if (!this._model || (!refresh && this._lastModelVersion === this._model.getVersionId())) {
-			// nothing to do
-			return;
-		}
-
-		const html = this._model.getValue();
-		const iFrameDocument = this._iFrameElement.contentDocument;
-
-		if (!iFrameDocument) {
-			// not visible anymore
-			return;
-		}
-
-		// the very first time we load just our script
-		// to integrate with the outside world
-		if ((<HTMLElement>iFrameDocument.firstChild).innerHTML === '<head></head><body></body>') {
-			iFrameDocument.open('text/html', 'replace');
-			iFrameDocument.write(Integration.defaultHtml());
-			iFrameDocument.close();
-		}
-
-		// diff a little against the current input and the new state
-		const parser = new DOMParser();
-		const newDocument = parser.parseFromString(html, 'text/html');
-		const styleElement = Integration.defaultStyle(this._iFrameElement.parentElement);
-		if (newDocument.head.hasChildNodes()) {
-			newDocument.head.insertBefore(styleElement, newDocument.head.firstChild);
-		} else {
-			newDocument.head.appendChild(styleElement)
-		}
-
-		if (newDocument.head.innerHTML !== iFrameDocument.head.innerHTML) {
-			iFrameDocument.head.innerHTML = newDocument.head.innerHTML;
-		}
-		if (newDocument.body.innerHTML !== iFrameDocument.body.innerHTML) {
-			iFrameDocument.body.innerHTML = newDocument.body.innerHTML;
-		}
-
-		this._lastModelVersion = this._model.getVersionId();
-	}
-}
-
-namespace Integration {
-
-	'use strict';
-
-	const scriptSource = [
-		'var ignoredKeys = [9 /* tab */, 32 /* space */, 33 /* page up */, 34 /* page down */, 38 /* up */, 40 /* down */];',
-		'var ignoredCtrlCmdKeys = [65 /* a */, 67 /* c */];',
-		'var ignoredShiftKeys = [9 /* tab */];',
-		'window.document.body.addEventListener("keydown", function(event) {',		// Listen to keydown events in the iframe
-		'	try {',
-		'		if (ignoredKeys.some(function(i) { return i === event.keyCode; })) {',
-		'			if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {',
-		'				return;',													// we want some single keys to be supported (e.g. Page Down for scrolling)
-		'			}',
-		'		}',
-		'',
-		'		if (ignoredCtrlCmdKeys.some(function(i) { return i === event.keyCode; })) {',
-		'			if (event.ctrlKey || event.metaKey) {',
-		'				return;',													// we want some ctrl/cmd keys to be supported (e.g. Ctrl+C for copy)
-		'			}',
-		'		}',
-		'',
-		'		if (ignoredShiftKeys.some(function(i) { return i === event.keyCode; })) {',
-		'			if (event.shiftKey) {',
-		'				return;',													// we want some shift keys to be supported (e.g. Shift+Tab for copy)
-		'			}',
-		'		}',
-		'',
-		'		event.preventDefault();',											// very important to not get duplicate actions when this one bubbles up!
-		'',
-		'		var fakeEvent = document.createEvent("KeyboardEvent");',			// create a keyboard event
-		'		Object.defineProperty(fakeEvent, "keyCode", {',						// we need to set some properties that Chrome wants
-		'			get : function() {',
-		'				return event.keyCode;',
-		'			}',
-		'		});',
-		'		Object.defineProperty(fakeEvent, "which", {',
-		'			get : function() {',
-		'				return event.keyCode;',
-		'			}',
-		'		});',
-		'		Object.defineProperty(fakeEvent, "target", {',
-		'			get : function() {',
-		'				return window && window.parent.document.body;',
-		'			}',
-		'		});',
-		'',
-		'		fakeEvent.initKeyboardEvent("keydown", true, true, document.defaultView, null, null, event.ctrlKey, event.altKey, event.shiftKey, event.metaKey);', // the API shape of this method is not clear to me, but it works ;)
-		'',
-		'		window.parent.document.dispatchEvent(fakeEvent);',					// dispatch the event onto the parent
-		'	} catch (error) {}',
-		'});',
-
-		// disable dropping into iframe!
-		'window.document.addEventListener("dragover", function (e) {',
-		'	e.preventDefault();',
-		'});',
-		'window.document.addEventListener("drop", function (e) {',
-		'	e.preventDefault();',
-		'});',
-		'window.document.body.addEventListener("dragover", function (e) {',
-		'	e.preventDefault();',
-		'});',
-		'window.document.body.addEventListener("drop", function (e) {',
-		'	e.preventDefault();',
-		'});'
-	];
-
-	export function defaultHtml() {
-		let all = [
-			'<html><head></head><body><script>',
-			...scriptSource,
-			'</script></body></html>',
-		];
-		return all.join('\n');
-	}
-
-	export function defaultStyle(element: HTMLElement): HTMLStyleElement {
-		const styles = window.getComputedStyle(element);
-		const styleElement = document.createElement('style');
-		styleElement.innerHTML = `* {
-			color: ${styles.color};
-			background: ${styles.background};
-			font-family: ${styles.fontFamily};
-			font-size: ${styles.fontSize}
-		}`;
-		return styleElement;
 	}
 }
